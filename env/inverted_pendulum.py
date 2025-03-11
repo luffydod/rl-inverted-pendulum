@@ -2,9 +2,10 @@ import gymnasium as gym
 import numpy as np
 
 class InvertedPendulumEnv(gym.Env):
-    def __init__(self):
+    def __init__(self, is_discrete=False):
         super(InvertedPendulumEnv, self).__init__()
         
+        self.is_discrete = is_discrete
         # 系统参数
         self.J = 1.91e-4  # 转动惯量
         self.m = 0.055    # 质量
@@ -22,12 +23,17 @@ class InvertedPendulumEnv(gym.Env):
         )
         
         # 定义动作空间 (电压u)
-        self.action_space = gym.spaces.Box(
-            low=-3.0,
-            high=3.0,
-            shape=(1,),
-            dtype=np.float32
-        )
+        if self.is_discrete:
+            self.n_actions = 21
+            self.action_space = gym.spaces.Discrete(self.n_actions)
+            self.discrete_actions = np.linspace(-3.0, 3.0, self.n_actions)
+        else:
+            self.action_space = gym.spaces.Box(
+                low=-3.0,
+                high=3.0,
+                shape=(1,),
+                dtype=np.float32
+            )
         
         self.state = None
         
@@ -38,7 +44,10 @@ class InvertedPendulumEnv(gym.Env):
     
     def step(self, action):
         alpha, alpha_dot = self.state
-        u = np.clip(action[0], -3.0, 3.0)  # 确保电压在[-3,3]范围内
+        if self.is_discrete:
+            u = self.discrete_actions[action]
+        else:
+            u = np.clip(action[0], -3.0, 3.0)  # 确保电压在[-3,3]范围内
         
         # 实现系统动力学方程
         # α̈ = (1/J)(mgl*sin(α) - bα̇ - (K²/R)α̇ + (K/R)u)
