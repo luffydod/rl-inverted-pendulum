@@ -1,2 +1,2 @@
-from .dqn import train_pendulum
+from .dqn import train_pendulum, test_pendulum
 

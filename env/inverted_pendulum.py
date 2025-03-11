@@ -39,11 +39,13 @@ class InvertedPendulumEnv(gym.Env):
         
     def reset(self):
         # 初始状态设置为最低点 [π, 0]
-        self.state = np.array([np.pi, 0.0])
-        return self.state
+        self.state = np.array([np.pi, 0.0], dtype=np.float32)
+        return self.state, {}
     
     def step(self, action):
-        alpha, alpha_dot = self.state
+        alpha = self.state[0]
+        alpha_dot = self.state[1]
+        
         if self.is_discrete:
             u = self.discrete_actions[action]
         else:
@@ -66,7 +68,8 @@ class InvertedPendulumEnv(gym.Env):
         # 确保角度在[-π,π]范围内
         alpha_new = ((alpha_new + np.pi) % (2 * np.pi)) - np.pi
         
-        self.state = np.array([alpha_new, alpha_dot_new])
+        self.state[0] = alpha_new
+        self.state[1] = alpha_dot_new
         
         # 计算奖励
         reward = self._compute_reward(u)

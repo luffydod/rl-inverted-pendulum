@@ -25,9 +25,9 @@ class QNetwork(nn.Module):
 
 def train_pendulum():
     # 训练参数
-    total_timesteps = 100000
+    total_timesteps = 10000
     learning_rate = 1e-3
-    buffer_size = 100000
+    buffer_size = 10000
     batch_size = 256
     gamma = 0.99
     tau = 0.005
@@ -71,7 +71,7 @@ def train_pendulum():
     )
     
     # Tensorboard
-    run_name = f"InvertedPendulum_DQN_{int(time.time())}"
+    run_name = f"DQN_{int(time.time())}"
     writer = SummaryWriter(f"runs/{run_name}")
     
     # 开始训练
@@ -145,3 +145,30 @@ def train_pendulum():
     # 保存模型
     torch.save(q_network.state_dict(), f"runs/{run_name}/q_network.pth")
     writer.close()
+    
+
+def test_pendulum(model_path: str = None):
+    if model_path is None:
+        raise ValueError("model_path is None")
+    
+    # 设置设备
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    env = InvertedPendulumEnv(is_discrete=True)
+    q_network = QNetwork(env).to(device)
+    q_network.load_state_dict(torch.load(model_path))
+    obs, _ = env.reset()
+    iters = 0
+    while True:
+        iters += 1
+        print(f"iter: {iters}")
+        print(f"obs: {obs}")
+        with torch.no_grad():
+            q_values = q_network(torch.FloatTensor(obs).to(device))
+            action = torch.argmax(q_values).cpu().numpy()
+        print(f"action: {action}")
+        next_obs, reward, done, _ = env.step(action)
+        print(f"reward: {reward}")
+        obs = next_obs
+        if done:
+            break
+
