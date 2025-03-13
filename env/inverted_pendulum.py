@@ -23,8 +23,8 @@ class InvertedPendulumEnv(gym.Env):
         self.n_actions = 11     # 离散动作数量
         self.max_voltage = 3.0  # 最大电压
         self.l = 0.3        # 摆杆长度 (m)
-        self.m = 0.055      # 质量 (kg)
-        self.J = (1/5) * self.m * self.l**2  # 转动惯量 (kg⋅m²)
+        self.m = 0.05      # 质量 (kg)
+        self.J = (1/3) * self.m * self.l**2  # 转动惯量 (kg⋅m²)
         self.g = 10.0       # 重力加速度 (m/s²)
         self.b = 3.0e-6   # 阻尼系数 (N⋅m⋅s/rad)
         self.K = 0.0536   # 转矩常数 (N⋅m/A)
@@ -87,16 +87,13 @@ class InvertedPendulumEnv(gym.Env):
         # 确保角度在[-π,π]范围内
         alpha_new = ((alpha_new + np.pi) % (2 * np.pi)) - np.pi
         
-        self.state[0] = alpha_new
-        self.state[1] = alpha_dot_new
-        
         # R(s,a) = -s^T diag(5,0.1)s - u² -> R(s, a) = - 5 * alpha^2 - 0.1 * alpha_dot^2 - u^2
         reward = -(5 * alpha_new**2 + 0.1 * alpha_dot_new**2 + u**2)
         
         # 判断是否达到目标
         done = self.steps >= self.max_episode_steps
         
-        return self.state, reward, done, {}
+        return self._get_obs(), reward, done, {}
     
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)

@@ -7,3 +7,5 @@ __pycache__
 
 runs
 tmp
+models/*
+wandb
