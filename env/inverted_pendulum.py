@@ -15,20 +15,31 @@ class InvertedPendulumEnv(gym.Env):
         "render_fps": 30,
     }
     
-    def __init__(self, discrete_action = False, render_mode: Optional[str] = None):
+    def __init__(self, max_episode_steps: int = 200, discrete_action: bool = False, render_mode: Optional[str] = None):
         super(InvertedPendulumEnv, self).__init__()
         
-        self.max_episode_steps = 200
+        self.max_episode_steps = max_episode_steps
         self.steps = 0
-        self.n_actions = 11     # 离散动作数量
+        self.n_actions = 51     # 离散动作数量
         self.max_voltage = 3.0  # 最大电压
-        self.l = 0.3        # 摆杆长度 (m)
-        self.m = 0.05      # 质量 (kg)
-        self.J = (1/3) * self.m * self.l**2  # 转动惯量 (kg⋅m²)
-        self.g = 10.0       # 重力加速度 (m/s²)
-        self.b = 3.0e-6   # 阻尼系数 (N⋅m⋅s/rad)
-        self.K = 0.0536   # 转矩常数 (N⋅m/A)
-        self.R = 9.5      # 电机电阻 (Ω)
+        self.l = 0.8            # 摆杆长度 (m)
+        
+        """
+            参考R42系列直流无刷电机
+            重量(kg): 0.55
+            转子惯量(gcm^2): 60.15
+            额定电压: 24VDC
+            额定电流(A): 3.4
+            额定转矩(Nm): 0.15
+            B = J / (\tau_m)
+            \tau_m = 0.01 s
+        """
+        self.m = 0.55 * 0.6             # 质量 (kg)
+        self.J = 60.15 * 1e-6           # 转动惯量 (kg⋅m²)
+        self.g = 10.0                   # 重力加速度 (m/s²)
+        self.b = self.J / 0.01 * 6.6    # 阻尼系数 (N⋅m⋅s/rad)
+        self.K = 0.15 / 3.4 * 0.8       # 转矩常数 (N⋅m/A)
+        self.R = 24 / 3.4 * 1.2         # 电机电阻 (Ω)
         
         self.render_mode = render_mode
         self.discrete_action = discrete_action
@@ -86,9 +97,13 @@ class InvertedPendulumEnv(gym.Env):
         
         # 确保角度在[-π,π]范围内
         alpha_new = ((alpha_new + np.pi) % (2 * np.pi)) - np.pi
+        # 确保角速度在[-15π,15π]范围内
+        alpha_dot_new = np.clip(alpha_dot_new, -15*np.pi, 15*np.pi)
         
         # R(s,a) = -s^T diag(5,0.1)s - u² -> R(s, a) = - 5 * alpha^2 - 0.1 * alpha_dot^2 - u^2
         reward = -(5 * alpha_new**2 + 0.1 * alpha_dot_new**2 + u**2)
+        
+        self.state = np.array([alpha_new, alpha_dot_new], dtype=np.float32)
         
         # 判断是否达到目标
         done = self.steps >= self.max_episode_steps
@@ -107,7 +122,6 @@ class InvertedPendulumEnv(gym.Env):
             alpha = options.get("alpha")
             alpha_dot = options.get("alpha_dot")
             self.state = np.array([alpha, alpha_dot], dtype=np.float32)
-            
         if self.render_mode == "human":
             self.render()
         return self._get_obs(), {}
@@ -136,7 +150,7 @@ class InvertedPendulumEnv(gym.Env):
         scale = self.screen_dim / (bound * 2)
         offset = self.screen_dim // 2
 
-        rod_length = 1 * scale
+        rod_length = 1.5 * scale
         rod_width = 0.2 * scale
         l, r, t, b = 0, rod_length, rod_width / 2, -rod_width / 2
         coords = [(l, b), (l, t), (r, t), (r, b)]

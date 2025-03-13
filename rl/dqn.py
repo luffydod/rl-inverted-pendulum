@@ -9,23 +9,59 @@ import torch.nn as nn
 import pygame
 import wandb
 from stable_baselines3.common.buffers import ReplayBuffer
-from PIL import Image
 
 from env import InvertedPendulumEnv
 
 class QNetwork(nn.Module):
     def __init__(self, env):
         super().__init__()
-        self.network = nn.Sequential(
-            nn.Linear(np.array(env.observation_space.shape).prod(), 128),
+        
+        # 获取输入维度并转换为Python int类型
+        self.input_dim = int(np.array(env.observation_space.shape).prod())
+        
+        # 1D卷积层部分
+        self.conv_layers = nn.Sequential(
+            # 确保使用Python int类型
+            nn.Unflatten(1, (1, self.input_dim)),
+            # 第一个卷积层
+            nn.Conv1d(in_channels=1, out_channels=16, kernel_size=1),
+            nn.ReLU(),
+            # 第二个卷积层
+            nn.Conv1d(in_channels=16, out_channels=32, kernel_size=1),
+            nn.ReLU(),
+            # 展平层
+            nn.Flatten()
+        )
+        
+        # MLP部分
+        self.mlp_layers = nn.Sequential(
+            nn.Linear(32 * self.input_dim, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, env.action_space.n),
+            nn.Linear(64, env.action_space.n)
         )
+        # self.network = nn.Sequential(
+        #     nn.Linear(np.array(env.observation_space.shape).prod(), 128),
+        #     nn.ReLU(),
+        #     nn.Linear(256, 128),
+        #     nn.ReLU(),
+        #     nn.Linear(128, env.action_space.n),
+        # )
 
     def forward(self, x):
-        return self.network(x)
+        # 确保输入形状正确
+        if len(x.shape) == 1:
+            x = x.unsqueeze(0)  # 添加batch维度
+            
+        # 通过卷积层
+        x = self.conv_layers(x)
+        
+        # 通过MLP层
+        x = self.mlp_layers(x)
+        
+        return x
+        # return self.network(x)
 
 def train_pendulum():
     # 初始化wandb
@@ -51,6 +87,8 @@ def train_pendulum():
     
     # 创建环境
     env = InvertedPendulumEnv(discrete_action=True, render_mode='rgb_array')
+    render_env = InvertedPendulumEnv(discrete_action=True, render_mode='rgb_array')
+    
     n_actions = env.n_actions
     
     # 设置设备
@@ -80,41 +118,35 @@ def train_pendulum():
     episode_count = 0
     
     for global_step in range(config["total_timesteps"]):
-        # 计算探索率
+        # calculate epsilon
         epsilon = config["start_epsilon"] - (config["start_epsilon"] - config["end_epsilon"]) * (global_step / (config["exploration_fraction"] * config["total_timesteps"]))
         epsilon = max(epsilon, config["end_epsilon"])
         
-        # 每隔一定步数记录一个episode的渲染效果
-        if (global_step+1) % 10000 == 0:
+        # Record video to wandb
+        if global_step % 50000 == 0:
             frames = []
-            obs, _ = env.reset()
+            obs, _ = render_env.reset()
             done = False
             
             while not done:
-                # 使用当前策略选择动作
-                if random.random() < epsilon:
-                    action = env.action_space.sample()
-                else:
-                    with torch.no_grad():
-                        q_values = q_network(torch.FloatTensor(obs).to(device))
-                        action = torch.argmax(q_values).cpu().numpy()
+                # action = render_env.action_space.sample()
+                with torch.no_grad():
+                    q_values = q_network(torch.FloatTensor(obs).to(device))
+                    action = torch.argmax(q_values).cpu().numpy()
                 
-                # 执行动作并记录画面
-                obs, reward, done, _ = env.step(action)
-                frame = env.render()
-                # 转换为PIL图像
-                frame = Image.fromarray(frame)
-                frames.append(frame)
+                # execute action and record frame
+                obs, reward, done, _ = render_env.step(action)
+                frame = render_env.render()
+                # (H, W, C) -> (C, H, W)
+                frames.append(frame.transpose(2, 0, 1))
             
-            # 重置环境
-            env.reset()
-            
-            # 记录视频到wandb
+            video_frames = np.array(frames)
+            # print(f"Video array shape: {video_frames.shape}, dtype: {video_frames.dtype}")
             wandb.log({
-                "Pendulum": wandb.Video(
-                    np.array([np.array(frame) for frame in frames]), 
+                "pendulum_video": wandb.Video(
+                    video_frames, 
                     fps=30, 
-                    format="gif"
+                    format="mp4"
                 )
             }, step=global_step)
         
@@ -136,16 +168,16 @@ def train_pendulum():
         episode_length += 1
         
         if done:
-            # 记录episode信息到wandb
+            # record episode information to wandb
             wandb.log({
-                "charts/episodic_return": episode_reward,
+                "charts/episodic_reward": episode_reward,
                 "charts/episodic_length": episode_length,
                 "charts/epsilon": epsilon
             }, step=global_step)
             
-            print(f"Episode {episode_count}, Return: {episode_reward:.2f}, Length: {episode_length}")
+            print(f"Episode {episode_count}, Reward: {episode_reward:.2f}, Length: {episode_length}")
             
-            # 重置环境
+            # reset environment
             obs, _ = env.reset()
             episode_reward = 0
             episode_length = 0
@@ -189,11 +221,12 @@ def train_pendulum():
 def test_pendulum(model_path: str = None):
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    env = InvertedPendulumEnv(discrete_action=True, render_mode="human")
+    env = InvertedPendulumEnv(max_episode_steps=1000, discrete_action=True, render_mode="human")
     if model_path:
         q_network = QNetwork(env).to(device)
         q_network.load_state_dict(torch.load(model_path))
-    obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
+    obs, _ = env.reset()
+    # obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
     iters = 0
     while True:
         iters += 1
@@ -210,7 +243,7 @@ def test_pendulum(model_path: str = None):
         env.render()
         
         # 添加小延时使动画更容易观察
-        time.sleep(0.08)
+        time.sleep(0.12)
         
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
