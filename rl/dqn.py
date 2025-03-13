@@ -50,7 +50,7 @@ def train_pendulum():
     torch.manual_seed(seed)
     
     # 创建环境
-    env = InvertedPendulumEnv(is_discrete=True, render_mode='train')
+    env = InvertedPendulumEnv(discrete_action=True, render_mode='rgb_array')
     n_actions = env.n_actions
     
     # 设置设备
@@ -180,21 +180,23 @@ def train_pendulum():
     
 
 def test_pendulum(model_path: str = None):
-    if model_path is None:
-        raise ValueError("model_path is None")
-    
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    env = InvertedPendulumEnv(is_discrete=True)
-    q_network = QNetwork(env).to(device)
-    q_network.load_state_dict(torch.load(model_path))
-    obs, _ = env.reset()
+    env = InvertedPendulumEnv(discrete_action=True, render_mode="human")
+    if model_path:
+        q_network = QNetwork(env).to(device)
+        q_network.load_state_dict(torch.load(model_path))
+    obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
     iters = 0
     while True:
         iters += 1
-        with torch.no_grad():
-            q_values = q_network(torch.FloatTensor(obs).to(device))
-            action = torch.argmax(q_values).cpu().numpy()
+        if model_path:
+            with torch.no_grad():
+                q_values = q_network(torch.FloatTensor(obs).to(device))
+                action = torch.argmax(q_values).cpu().numpy()
+        else:
+            action = env.action_space.sample()
+            
         next_obs, reward, done, _ = env.step(action)
         print(f"iter: {iters}, obs: {obs}, action: {action}, reward: {reward}")
         # 渲染当前状态
