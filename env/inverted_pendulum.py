@@ -20,7 +20,7 @@ class InvertedPendulumEnv(gym.Env):
         
         self.max_episode_steps = max_episode_steps
         self.steps = 0
-        self.n_actions = 51     # 离散动作数量
+        self.n_actions = 31     # 离散动作数量
         self.max_voltage = 3.0  # 最大电压
         self.l = 0.8            # 摆杆长度 (m)
         
@@ -35,11 +35,11 @@ class InvertedPendulumEnv(gym.Env):
             \tau_m = 0.01 s
         """
         self.m = 0.55 * 0.6             # 质量 (kg)
-        self.J = 60.15 * 1e-6           # 转动惯量 (kg⋅m²)
+        self.J = 60.15 * 1e-4                 # 转动惯量 (kg⋅m²)
         self.g = 10.0                   # 重力加速度 (m/s²)
-        self.b = self.J / 0.01 * 6.6    # 阻尼系数 (N⋅m⋅s/rad)
-        self.K = 0.15 / 3.4 * 0.8       # 转矩常数 (N⋅m/A)
-        self.R = 24 / 3.4 * 1.2         # 电机电阻 (Ω)
+        self.b = self.J / 0.01          # 阻尼系数 (N⋅m⋅s/rad)
+        self.K = 0.15 / 3.4           # 转矩常数 (N⋅m/A)
+        self.R = 24 / 3.4            # 电机电阻 (Ω)
         
         self.render_mode = render_mode
         self.discrete_action = discrete_action
@@ -101,7 +101,10 @@ class InvertedPendulumEnv(gym.Env):
         alpha_dot_new = np.clip(alpha_dot_new, -15*np.pi, 15*np.pi)
         
         # R(s,a) = -s^T diag(5,0.1)s - u² -> R(s, a) = - 5 * alpha^2 - 0.1 * alpha_dot^2 - u^2
-        reward = -(5 * alpha_new**2 + 0.1 * alpha_dot_new**2 + u**2)
+        a = normalize(alpha_new, -np.pi, np.pi)
+        a_dot = normalize(alpha_dot_new, -15*np.pi, 15*np.pi)
+        u = normalize(u, -3, 3)
+        reward = -(5 * a**2 + 0.1 * a_dot**2 + u**2)
         
         self.state = np.array([alpha_new, alpha_dot_new], dtype=np.float32)
         
@@ -220,4 +223,13 @@ class InvertedPendulumEnv(gym.Env):
             pygame.display.quit()
             pygame.quit()
             self.isopen = False
+            
+            
+def normalize(x, min_val, max_val):
+    # [-1, 1]
+    return 2 * (x - min_val) / (max_val - min_val) - 1
+
+def denormalize(x, min_val, max_val):
+    # [-1, 1] -> [min_val, max_val]
+    return (x + 1) * (max_val - min_val) / 2 + min_val
         
