@@ -15,7 +15,7 @@ class InvertedPendulumEnv(gym.Env):
         "render_fps": 30,
     }
     
-    def __init__(self, max_episode_steps: int = 200, discrete_action: bool = False, render_mode: Optional[str] = None):
+    def __init__(self, max_episode_steps: int = 200, normalize_state: bool = False, discrete_action: bool = False, render_mode: Optional[str] = None):
         super(InvertedPendulumEnv, self).__init__()
         
         self.max_episode_steps = max_episode_steps
@@ -32,29 +32,41 @@ class InvertedPendulumEnv(gym.Env):
             额定电流(A): 3.4
             额定转矩(Nm): 0.15
             B = J / (\tau_m)
-            \tau_m = 0.01 s
+            \tau_m = 0.05 s
         """
         self.m = 0.55 * 0.6             # 质量 (kg)
-        self.J = 60.15 * 1e-4                 # 转动惯量 (kg⋅m²)
-        self.g = 10.0                   # 重力加速度 (m/s²)
-        self.b = self.J / 0.01          # 阻尼系数 (N⋅m⋅s/rad)
+        self.J = 60.15 * 1e-5                 # 转动惯量 (kg⋅m²)
+        self.g = 9.81                   # 重力加速度 (m/s²)
+        self.b = self.J / 0.05          # 阻尼系数 (N⋅m⋅s/rad)
         self.K = 0.15 / 3.4           # 转矩常数 (N⋅m/A)
         self.R = 24 / 3.4            # 电机电阻 (Ω)
         
         self.render_mode = render_mode
         self.discrete_action = discrete_action
-        
+        self.normalize_state = normalize_state
+
         self.last_u = 0
         self.screen_dim = 500
         self.screen = None
         self.clock = None
         self.isopen = True
         
+        self.state_bounds = {
+            'alpha': (-np.pi, np.pi),
+            'alpha_dot': (-15*np.pi, 15*np.pi),
+            'u': (-self.max_voltage, self.max_voltage)
+        }
+        
         high = np.array([np.pi, 15*np.pi], dtype=np.float32)
         # 定义状态空间 [角度α, 角速度α_dot]
-        self.observation_space = gym.spaces.Box(
-            low=-high, high=high, dtype=np.float32
-        )
+        if self.normalize_state:
+            self.observation_space = gym.spaces.Box(
+                low=-np.ones_like(high), high=np.ones_like(high), dtype=np.float32
+            )
+        else:
+            self.observation_space = gym.spaces.Box(
+                low=-high, high=high, dtype=np.float32
+            )
         
         # 定义动作空间 (电压u)
         if self.discrete_action:
@@ -109,18 +121,19 @@ class InvertedPendulumEnv(gym.Env):
         self.state = np.array([alpha_new, alpha_dot_new], dtype=np.float32)
         
         # 判断是否达到目标
-        done = self.steps >= self.max_episode_steps
+        print(f"self.steps: {self.steps}, self.max_episode_steps: {self.max_episode_steps}")
+        terminated = self.steps >= self.max_episode_steps  # 任务自然终止
+        truncated = self.steps >= self.max_episode_steps  # 到达最大步数限制
         
-        return self._get_obs(), reward, done, {}
+        return self._get_obs(), reward, terminated, truncated, {}
     
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
         self.steps = 0
-
         if options is None:
-            high = np.array([DEFAULT_ALPHA, DEFAULT_ALPHA_DOT])
-            low = -high
-            self.state = self.np_random.uniform(low=low, high=high)
+            alpha = self.np_random.uniform(*self.state_bounds['alpha'])
+            alpha_dot = self.np_random.uniform(*self.state_bounds['alpha_dot'])
+            self.state = np.array([alpha, alpha_dot], dtype=np.float32)
         else:
             alpha = options.get("alpha")
             alpha_dot = options.get("alpha_dot")
@@ -129,9 +142,18 @@ class InvertedPendulumEnv(gym.Env):
             self.render()
         return self._get_obs(), {}
     
+    def _normalize_state(self, state):
+        alpha, alpha_dot = state
+        norm_alpha = normalize(alpha, *self.state_bounds['alpha'])
+        norm_alpha_dot = normalize(alpha_dot, *self.state_bounds['alpha_dot'])
+        return np.array([norm_alpha, norm_alpha_dot], dtype=np.float32)
+    
     def _get_obs(self):
-        alpha, alpha_dot = self.state
-        return np.array([alpha, alpha_dot], dtype=np.float32)
+        if self.normalize_state:
+            return self._normalize_state(self.state)
+        else:
+            alpha, alpha_dot = self.state
+            return np.array([alpha, alpha_dot], dtype=np.float32)
     
     def render(self):
         if self.screen is None:
@@ -231,5 +253,5 @@ def normalize(x, min_val, max_val):
 
 def denormalize(x, min_val, max_val):
     # [-1, 1] -> [min_val, max_val]
-    return (x + 1) * (max_val - min_val) / 2 + min_val
+    return 0.5 * (x + 1) * (max_val - min_val) + min_val
         

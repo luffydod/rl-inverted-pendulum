@@ -8,6 +8,7 @@ import torch.optim as optim
 import torch.nn as nn
 import pygame
 import wandb
+import gymnasium as gym
 from stable_baselines3.common.buffers import ReplayBuffer
 
 from env import InvertedPendulumEnv
@@ -63,6 +64,10 @@ class QNetwork(nn.Module):
         return x
         # return self.network(x)
 
+def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
+    slope = (end_e - start_e) / duration
+    return max(slope * t + start_e, end_e)
+
 def train_pendulum():
     # 初始化wandb
     run = wandb.init(
@@ -86,10 +91,12 @@ def train_pendulum():
     config = run.config
     
     # 创建环境
-    env = InvertedPendulumEnv(discrete_action=True, render_mode='rgb_array')
+    env = InvertedPendulumEnv(normalize_state=True, discrete_action=True, render_mode='rgb_array')
+    env = gym.wrappers.RecordEpisodeStatistics(env)
+    
     render_env = InvertedPendulumEnv(discrete_action=True, render_mode='rgb_array')
     
-    n_actions = env.n_actions
+    n_actions = env.action_space.n
     
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -113,14 +120,15 @@ def train_pendulum():
     
     # 开始训练
     obs, _ = env.reset()
-    episode_reward = 0
-    episode_length = 0
-    episode_count = 0
     
     for global_step in range(config["total_timesteps"]):
         # calculate epsilon
-        epsilon = config["start_epsilon"] - (config["start_epsilon"] - config["end_epsilon"]) * (global_step / (config["exploration_fraction"] * config["total_timesteps"]))
-        epsilon = max(epsilon, config["end_epsilon"])
+        epsilon = linear_schedule(
+            start_e=config["start_epsilon"],
+            end_e=config["end_epsilon"],
+            duration=config["exploration_fraction"] * config["total_timesteps"],
+            t=global_step
+        )
         
         # Record video to wandb
         if global_step % 50000 == 0:
@@ -135,7 +143,9 @@ def train_pendulum():
                     action = torch.argmax(q_values).cpu().numpy()
                 
                 # execute action and record frame
-                obs, reward, done, _ = render_env.step(action)
+                obs, reward, terminated, truncated, _ = render_env.step(action)
+                done = terminated or truncated
+                
                 frame = render_env.render()
                 # (H, W, C) -> (C, H, W)
                 frames.append(frame.transpose(2, 0, 1))
@@ -159,31 +169,22 @@ def train_pendulum():
                 action = torch.argmax(q_values).cpu().numpy()
         
         # 执行动作
-        next_obs, reward, done, _ = env.step(action)
+        next_obs, reward, terminated, truncated, info = env.step(action)
         
-        # 记录回放缓冲区
-        rb.add(obs, next_obs, action, reward, done, {})
-        
-        episode_reward += reward
-        episode_length += 1
-        
-        if done:
+        if "episode" in info:
+            print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
             # record episode information to wandb
             wandb.log({
-                "charts/episodic_reward": episode_reward,
-                "charts/episodic_length": episode_length,
+                "charts/episodic_return": info["episode"]["r"],
+                "charts/episodic_length": info["episode"]["l"],
+                "charts/episodic_time": info["episode"]["t"],
                 "charts/epsilon": epsilon
             }, step=global_step)
-            
-            print(f"Episode {episode_count}, Reward: {episode_reward:.2f}, Length: {episode_length}")
-            
-            # reset environment
-            obs, _ = env.reset()
-            episode_reward = 0
-            episode_length = 0
-            episode_count += 1
-        else:
-            obs = next_obs
+                
+        # 记录回放缓冲区
+        real_next_obs = next_obs.copy()
+        done = terminated or truncated
+        rb.add(obs, real_next_obs, action, reward, done, info)
         
         # 训练
         if global_step > config["learning_starts"] and global_step % config["train_frequency"] == 0:
@@ -192,7 +193,8 @@ def train_pendulum():
                 target_max, _ = target_network(data.next_observations).max(dim=1)
                 td_target = data.rewards.flatten() + config["gamma"] * target_max * (1 - data.dones.flatten())
             
-            old_val = q_network(data.observations).gather(1, data.actions.long()).squeeze()
+            # 根据动作索引获取Q值, long() 将张量转换为整数类型 data.actions.long() is necessary?
+            old_val = q_network(data.observations).gather(1, data.actions).squeeze()
             loss = nn.MSELoss()(td_target, old_val)
             
             optimizer.zero_grad()
@@ -200,7 +202,7 @@ def train_pendulum():
             optimizer.step()
             
             # 记录损失
-            if global_step % 1000 == 0:
+            if global_step % 100 == 0:
                 wandb.log({
                     "losses/td_loss": loss.item(),
                     "losses/q_values": old_val.mean().item()
@@ -214,10 +216,9 @@ def train_pendulum():
     # 保存模型
     os.makedirs("models/dqn", exist_ok=True)
     torch.save(q_network.state_dict(), f"models/dqn/{run.id}.pth")
-    wandb.save(f"models/dqn/{run.id}.pth")
+    # wandb.save(f"models/dqn/{run.id}.pth")
     wandb.finish()
     
-
 def test_pendulum(model_path: str = None):
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -237,7 +238,7 @@ def test_pendulum(model_path: str = None):
         else:
             action = env.action_space.sample()
             
-        next_obs, reward, done, _ = env.step(action)
+        next_obs, reward, terminated, truncated, _ = env.step(action)
         print(f"iter: {iters}, obs: {obs}, action: {action}, reward: {reward}")
         # 渲染当前状态
         env.render()
@@ -250,6 +251,6 @@ def test_pendulum(model_path: str = None):
                 pygame.quit()
                 sys.exit()
         obs = next_obs
-        if done:
+        if terminated or truncated:
             break
 

@@ -7,5 +7,5 @@ __pycache__
 
 runs
 tmp
-models/*
+models
 wandb
