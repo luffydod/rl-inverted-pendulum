@@ -8,9 +8,9 @@ import torch.optim as optim
 import torch.nn as nn
 import pygame
 import wandb
-import gymnasium as gym
+from gymnasium.vector import SyncVectorEnv
+from gymnasium.wrappers import RecordEpisodeStatistics
 from stable_baselines3.common.buffers import ReplayBuffer
-
 from env import InvertedPendulumEnv
 
 class QNetwork(nn.Module):
@@ -18,7 +18,7 @@ class QNetwork(nn.Module):
         super().__init__()
         
         # 获取输入维度并转换为Python int类型
-        self.input_dim = int(np.array(env.observation_space.shape).prod())
+        self.input_dim = int(np.array(env.single_observation_space.shape).prod())
         
         # 1D卷积层部分
         self.conv_layers = nn.Sequential(
@@ -40,7 +40,7 @@ class QNetwork(nn.Module):
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, env.action_space.n)
+            nn.Linear(64, env.single_action_space.n)
         )
         # self.network = nn.Sequential(
         #     nn.Linear(np.array(env.observation_space.shape).prod(), 128),
@@ -77,7 +77,7 @@ def train_pendulum():
             "learning_rate": 2e-4,
             "buffer_size": 10000,
             "batch_size": 128,
-            "gamma": 0.99,
+            "gamma": 0.98,
             "tau": 1.0,     # the target network update rate
             "target_network_frequency": 500,    # the timesteps it takes to update the target network
             "learning_starts": 10000,
@@ -92,18 +92,18 @@ def train_pendulum():
     
     # 创建环境
     env = InvertedPendulumEnv(normalize_state=True, discrete_action=True, render_mode='rgb_array')
-    env = gym.wrappers.RecordEpisodeStatistics(env)
-    
+    env = RecordEpisodeStatistics(env)
+    envs = SyncVectorEnv([lambda: env])
+    n_actions = envs.single_action_space.n
+
     render_env = InvertedPendulumEnv(discrete_action=True, render_mode='rgb_array')
-    
-    n_actions = env.action_space.n
     
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # 创建网络
-    q_network = QNetwork(env).to(device)
-    target_network = QNetwork(env).to(device)
+    q_network = QNetwork(envs).to(device)
+    target_network = QNetwork(envs).to(device)
     target_network.load_state_dict(q_network.state_dict())
     
     # 优化器
@@ -112,14 +112,13 @@ def train_pendulum():
     # 经验回放缓冲区
     rb = ReplayBuffer(
         config["buffer_size"],
-        env.observation_space,
-        env.action_space,
+        envs.single_observation_space,
+        envs.single_action_space,
         device,
         handle_timeout_termination=False,
     )
     
-    # 开始训练
-    obs, _ = env.reset()
+    obs, _ = envs.reset()
     
     for global_step in range(config["total_timesteps"]):
         # calculate epsilon
@@ -162,29 +161,29 @@ def train_pendulum():
         
         # 选择动作
         if random.random() < epsilon:
-            action = np.array(random.randint(0, n_actions-1))
+            actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
         else:
             with torch.no_grad():
                 q_values = q_network(torch.FloatTensor(obs).to(device))
-                action = torch.argmax(q_values).cpu().numpy()
+                actions = torch.argmax(q_values, dim=1).cpu().numpy()
         
         # 执行动作
-        next_obs, reward, terminated, truncated, info = env.step(action)
-        
-        if "episode" in info:
-            print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
+        next_obs, rewards, terminations, truncations, infos = envs.step(actions)
+
+        if "episode" in infos:
+            print(f"global_step={global_step}, episodic_return={infos['episode']['r'][0]}")
             # record episode information to wandb
             wandb.log({
-                "charts/episodic_return": info["episode"]["r"],
-                "charts/episodic_length": info["episode"]["l"],
-                "charts/episodic_time": info["episode"]["t"],
+                "charts/episodic_return": infos["episode"]["r"][0],
+                "charts/episodic_length": infos["episode"]["l"][0],
+                "charts/episodic_time": infos["episode"]["t"][0],
                 "charts/epsilon": epsilon
             }, step=global_step)
                 
         # 记录回放缓冲区
         real_next_obs = next_obs.copy()
-        done = terminated or truncated
-        rb.add(obs, real_next_obs, action, reward, done, info)
+
+        rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
         
         # 训练
         if global_step > config["learning_starts"] and global_step % config["train_frequency"] == 0:
@@ -223,6 +222,8 @@ def test_pendulum(model_path: str = None):
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     env = InvertedPendulumEnv(max_episode_steps=1000, discrete_action=True, render_mode="human")
+    env = SyncVectorEnv([lambda: env])
+
     if model_path:
         q_network = QNetwork(env).to(device)
         q_network.load_state_dict(torch.load(model_path))
@@ -234,10 +235,9 @@ def test_pendulum(model_path: str = None):
         if model_path:
             with torch.no_grad():
                 q_values = q_network(torch.FloatTensor(obs).to(device))
-                action = torch.argmax(q_values).cpu().numpy()
+                action = torch.argmax(q_values, dim=1).cpu().numpy()
         else:
-            action = env.action_space.sample()
-            
+            action = np.array([env.single_action_space.sample() for _ in range(env.num_envs)])
         next_obs, reward, terminated, truncated, _ = env.step(action)
         print(f"iter: {iters}, obs: {obs}, action: {action}, reward: {reward}")
         # 渲染当前状态

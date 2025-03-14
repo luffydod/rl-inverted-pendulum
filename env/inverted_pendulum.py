@@ -12,7 +12,7 @@ class InvertedPendulumEnv(gym.Env):
     
     metadata = {
         "render_modes": ["human", "rgb_array"],
-        "render_fps": 30,
+        "render_fps": 10,
     }
     
     def __init__(self, max_episode_steps: int = 200, normalize_state: bool = False, discrete_action: bool = False, render_mode: Optional[str] = None):
@@ -20,26 +20,15 @@ class InvertedPendulumEnv(gym.Env):
         
         self.max_episode_steps = max_episode_steps
         self.steps = 0
-        self.n_actions = 31     # 离散动作数量
+        self.n_actions = 3     # 离散动作数量
         self.max_voltage = 3.0  # 最大电压
-        self.l = 0.8            # 摆杆长度 (m)
-        
-        """
-            参考R42系列直流无刷电机
-            重量(kg): 0.55
-            转子惯量(gcm^2): 60.15
-            额定电压: 24VDC
-            额定电流(A): 3.4
-            额定转矩(Nm): 0.15
-            B = J / (\tau_m)
-            \tau_m = 0.05 s
-        """
-        self.m = 0.55 * 0.6             # 质量 (kg)
-        self.J = 60.15 * 1e-5                 # 转动惯量 (kg⋅m²)
+        self.l = 0.042            # 摆杆长度 (m)
+        self.m = 0.055            # 质量 (kg)
+        self.J = 1.91 * 1e-4          # 转动惯量 (kg⋅m²)
         self.g = 9.81                   # 重力加速度 (m/s²)
-        self.b = self.J / 0.05          # 阻尼系数 (N⋅m⋅s/rad)
-        self.K = 0.15 / 3.4           # 转矩常数 (N⋅m/A)
-        self.R = 24 / 3.4            # 电机电阻 (Ω)
+        self.b = 3 * 1e-6        # 阻尼系数 (N⋅m⋅s/rad)
+        self.K = 0.0536           # 转矩常数 (N⋅m/A)
+        self.R = 9.5            # 电机电阻 (Ω)
         
         self.render_mode = render_mode
         self.discrete_action = discrete_action
@@ -103,7 +92,7 @@ class InvertedPendulumEnv(gym.Env):
         )
         
         # 使用欧拉方法进行数值积分
-        dt = 0.01  # 时间步长
+        dt = 0.005  # 时间步长
         alpha_dot_new = alpha_dot + alpha_ddot * dt
         alpha_new = alpha + alpha_dot * dt
         
