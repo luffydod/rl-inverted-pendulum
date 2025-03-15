@@ -61,10 +61,14 @@ def train_pendulum():
             "start_epsilon": 1.0,
             "end_epsilon": 0.05,
             "exploration_fraction": 0.8, # the fraction of `total-timesteps` it takes from start epsilon to go end epsilon
+            "eval_frequency": 10000,
         },
         monitor_gym=True
     )
     config = run.config
+    
+    best_reward = -float('inf')
+    best_model = None
     
     # 创建环境
     envs = SyncVectorEnv([make_env() for _ in range(config["n_envs"])])
@@ -175,9 +179,17 @@ def train_pendulum():
         # Record video to wandb
         render_video(global_step, render_env, q_network, device)
         
+        # eval model
+        eval_reward = eval_model(global_step, render_env, q_network, device)
+        if eval_reward and eval_reward > best_reward:
+            best_reward = eval_reward
+            best_model = q_network.state_dict()
+        
     # 保存模型
     os.makedirs("models/dqn", exist_ok=True)
     torch.save(q_network.state_dict(), f"models/dqn/{run.id}.pth")
+    if best_model:
+        torch.save(best_model, f"models/dqn/{run.id}_best.pth")
     # wandb.save(f"models/dqn/{run.id}.pth")
     wandb.finish()
     
@@ -248,3 +260,28 @@ def render_video(global_step, env, model, device, render_freq=10000):
             )
         }, step=global_step)
         
+def eval_model(global_step, env, model, device, eval_freq=10000):
+    if global_step % eval_freq == 0:
+        obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
+        done = False
+        cumulative_reward = 0
+        
+        while not done:
+            # action = render_env.action_space.sample()
+            with torch.no_grad():
+                q_values = model(torch.FloatTensor(obs).to(device))
+                action = torch.argmax(q_values).cpu().numpy()
+            
+            # execute action and record frame
+            obs, reward, terminated, truncated, _ = env.step(action)
+            
+            done = terminated
+            cumulative_reward += reward
+        
+        wandb.log({
+            "eval/episodic_return": cumulative_reward
+        }, step=global_step)
+        
+        return float(cumulative_reward)
+    else:
+        return None
