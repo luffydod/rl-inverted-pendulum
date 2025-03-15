@@ -78,7 +78,7 @@ class InvertedPendulumEnv(gym.Env):
         if self.discrete_action:
             u = self.discrete_actions[action]
         else:
-            u = np.clip(action[0], -3.0, 3.0)  # 确保电压在[-3,3]范围内
+            u = np.clip(action, -3.0, 3.0)  # 确保电压在[-3,3]范围内
         
         self.last_u = u # for rendering
         
@@ -109,8 +109,6 @@ class InvertedPendulumEnv(gym.Env):
         
         self.state = np.array([alpha_new, alpha_dot_new], dtype=np.float32)
         
-        # 判断是否达到目标
-        print(f"self.steps: {self.steps}, self.max_episode_steps: {self.max_episode_steps}")
         terminated = self.steps >= self.max_episode_steps  # 任务自然终止
         truncated = self.steps >= self.max_episode_steps  # 到达最大步数限制
         

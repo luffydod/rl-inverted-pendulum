@@ -6,6 +6,7 @@ import random
 import torch
 import torch.optim as optim
 import torch.nn as nn
+import torch.nn.functional as F
 import pygame
 import wandb
 from gymnasium.vector import SyncVectorEnv
@@ -14,55 +15,29 @@ from stable_baselines3.common.buffers import ReplayBuffer
 from env import InvertedPendulumEnv
 
 class QNetwork(nn.Module):
-    def __init__(self, env):
+    def __init__(self, state_dim=2, action_dim=3):
         super().__init__()
-        
-        # 获取输入维度并转换为Python int类型
-        self.input_dim = int(np.array(env.single_observation_space.shape).prod())
-        
-        # 1D卷积层部分
-        self.conv_layers = nn.Sequential(
-            # 确保使用Python int类型
-            nn.Unflatten(1, (1, self.input_dim)),
-            # 第一个卷积层
-            nn.Conv1d(in_channels=1, out_channels=16, kernel_size=1),
+        self.network = nn.Sequential(
+            nn.Linear(state_dim, 256),
             nn.ReLU(),
-            # 第二个卷积层
-            nn.Conv1d(in_channels=16, out_channels=32, kernel_size=1),
+            nn.Linear(256, 128),
             nn.ReLU(),
-            # 展平层
-            nn.Flatten()
+            nn.Linear(128, action_dim),
         )
-        
-        # MLP部分
-        self.mlp_layers = nn.Sequential(
-            nn.Linear(32 * self.input_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, env.single_action_space.n)
-        )
-        # self.network = nn.Sequential(
-        #     nn.Linear(np.array(env.observation_space.shape).prod(), 128),
-        #     nn.ReLU(),
-        #     nn.Linear(256, 128),
-        #     nn.ReLU(),
-        #     nn.Linear(128, env.action_space.n),
-        # )
 
     def forward(self, x):
-        # 确保输入形状正确
-        if len(x.shape) == 1:
-            x = x.unsqueeze(0)  # 添加batch维度
-            
-        # 通过卷积层
-        x = self.conv_layers(x)
-        
-        # 通过MLP层
-        x = self.mlp_layers(x)
-        
-        return x
-        # return self.network(x)
+        return self.network(x)
+
+def make_env(normalize_state=True, discrete_action=True, render_mode='rgb_array'):
+    def thunk():
+        env = InvertedPendulumEnv(
+            normalize_state=normalize_state, 
+            discrete_action=discrete_action, 
+            render_mode=render_mode
+        )
+        env = RecordEpisodeStatistics(env)
+        return env
+    return thunk
 
 def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
     slope = (end_e - start_e) / duration
@@ -73,6 +48,7 @@ def train_pendulum():
     run = wandb.init(
         project="inverted-pendulum",
         config={
+            "n_envs": 4,
             "total_timesteps": 500000,
             "learning_rate": 2e-4,
             "buffer_size": 10000,
@@ -91,10 +67,7 @@ def train_pendulum():
     config = run.config
     
     # 创建环境
-    env = InvertedPendulumEnv(normalize_state=True, discrete_action=True, render_mode='rgb_array')
-    env = RecordEpisodeStatistics(env)
-    envs = SyncVectorEnv([lambda: env])
-    n_actions = envs.single_action_space.n
+    envs = SyncVectorEnv([make_env() for _ in range(config["n_envs"])])
 
     render_env = InvertedPendulumEnv(discrete_action=True, render_mode='rgb_array')
     
@@ -102,8 +75,8 @@ def train_pendulum():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # 创建网络
-    q_network = QNetwork(envs).to(device)
-    target_network = QNetwork(envs).to(device)
+    q_network = QNetwork().to(device)
+    target_network = QNetwork().to(device)
     target_network.load_state_dict(q_network.state_dict())
     
     # 优化器
@@ -115,9 +88,11 @@ def train_pendulum():
         envs.single_observation_space,
         envs.single_action_space,
         device,
+        n_envs=envs.num_envs,
         handle_timeout_termination=False,
     )
     
+    # (n_envs, state_dim)
     obs, _ = envs.reset()
     
     for global_step in range(config["total_timesteps"]):
@@ -129,42 +104,12 @@ def train_pendulum():
             t=global_step
         )
         
-        # Record video to wandb
-        if global_step % 50000 == 0:
-            frames = []
-            obs, _ = render_env.reset()
-            done = False
-            
-            while not done:
-                # action = render_env.action_space.sample()
-                with torch.no_grad():
-                    q_values = q_network(torch.FloatTensor(obs).to(device))
-                    action = torch.argmax(q_values).cpu().numpy()
-                
-                # execute action and record frame
-                obs, reward, terminated, truncated, _ = render_env.step(action)
-                done = terminated or truncated
-                
-                frame = render_env.render()
-                # (H, W, C) -> (C, H, W)
-                frames.append(frame.transpose(2, 0, 1))
-            
-            video_frames = np.array(frames)
-            # print(f"Video array shape: {video_frames.shape}, dtype: {video_frames.dtype}")
-            wandb.log({
-                "pendulum_video": wandb.Video(
-                    video_frames, 
-                    fps=30, 
-                    format="mp4"
-                )
-            }, step=global_step)
-        
         # 选择动作
         if random.random() < epsilon:
             actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
         else:
             with torch.no_grad():
-                q_values = q_network(torch.FloatTensor(obs).to(device))
+                q_values = q_network(torch.Tensor(obs).to(device))
                 actions = torch.argmax(q_values, dim=1).cpu().numpy()
         
         # 执行动作
@@ -194,7 +139,8 @@ def train_pendulum():
             
             # 根据动作索引获取Q值, long() 将张量转换为整数类型 data.actions.long() is necessary?
             old_val = q_network(data.observations).gather(1, data.actions).squeeze()
-            loss = nn.MSELoss()(td_target, old_val)
+            # loss = nn.MSELoss()(td_target, old_val)
+            loss = F.smooth_l1_loss(td_target, old_val)
             
             optimizer.zero_grad()
             loss.backward()
@@ -212,6 +158,9 @@ def train_pendulum():
             for target_param, param in zip(target_network.parameters(), q_network.parameters()):
                 target_param.data.copy_(config["tau"] * param.data + (1.0 - config["tau"]) * target_param.data)
     
+        # Record video to wandb
+        render_video(global_step, render_env, q_network, device)
+        
     # 保存模型
     os.makedirs("models/dqn", exist_ok=True)
     torch.save(q_network.state_dict(), f"models/dqn/{run.id}.pth")
@@ -254,3 +203,34 @@ def test_pendulum(model_path: str = None):
         if terminated or truncated:
             break
 
+def render_video(global_step, env, model, device):
+    if global_step % 50000 == 0:
+        frames = []
+        obs, _ = env.reset()
+        done = False
+        
+        while not done:
+            # action = render_env.action_space.sample()
+            with torch.no_grad():
+                q_values = model(torch.FloatTensor(obs).to(device))
+                action = torch.argmax(q_values).cpu().numpy()
+            
+            # execute action and record frame
+            obs, reward, terminated, truncated, _ = env.step(action)
+            
+            done = terminated
+            
+            frame = env.render()
+            # (H, W, C) -> (C, H, W)
+            frames.append(frame.transpose(2, 0, 1))
+        
+        video_frames = np.array(frames)
+        # print(f"Video array shape: {video_frames.shape}, dtype: {video_frames.dtype}")
+        wandb.log({
+            "pendulum_video": wandb.Video(
+                video_frames, 
+                fps=10, 
+                format="gif"
+            )
+        }, step=global_step)
+        
