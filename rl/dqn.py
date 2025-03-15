@@ -18,17 +18,17 @@ class QNetwork(nn.Module):
     def __init__(self, state_dim=2, action_dim=3):
         super().__init__()
         self.network = nn.Sequential(
-            nn.Linear(state_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, action_dim),
+            nn.Linear(state_dim, 128),
+            nn.Tanh(),
+            nn.Linear(128, 64),
+            nn.Tanh(),
+            nn.Linear(64, action_dim),
         )
 
     def forward(self, x):
         return self.network(x)
 
-def make_env(normalize_state=True, discrete_action=True, render_mode='rgb_array'):
+def make_env(normalize_state=False, discrete_action=True, render_mode='rgb_array'):
     def thunk():
         env = InvertedPendulumEnv(
             normalize_state=normalize_state, 
@@ -51,16 +51,16 @@ def train_pendulum():
             "n_envs": 4,
             "total_timesteps": 500000,
             "learning_rate": 2e-4,
-            "buffer_size": 10000,
-            "batch_size": 128,
+            "buffer_size": 100000,
+            "batch_size": 256,
             "gamma": 0.98,
-            "tau": 1.0,     # the target network update rate
-            "target_network_frequency": 500,    # the timesteps it takes to update the target network
-            "learning_starts": 10000,
+            "tau": 0.01,     # the target network update rate
+            "target_network_frequency": 100,    # the timesteps it takes to update the target network
+            "learning_starts": 5000,
             "train_frequency": 10,
             "start_epsilon": 1.0,
             "end_epsilon": 0.05,
-            "exploration_fraction": 0.5, # the fraction of `total-timesteps` it takes from start epsilon to go end epsilon
+            "exploration_fraction": 0.8, # the fraction of `total-timesteps` it takes from start epsilon to go end epsilon
         },
         monitor_gym=True
     )
@@ -115,13 +115,24 @@ def train_pendulum():
         # 执行动作
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
 
+        wandb.log({
+            "training/avg_reward": rewards.mean(),
+            "training/state_alpha": obs[:, 0].mean(),      # 角度均值
+            "training/state_alpha_dot": obs[:, 1].mean(),  # 角速度均值
+            "training/state_alpha_std": obs[:, 0].std(),   # 角度标准差
+            "training/state_alpha_dot_std": obs[:, 1].std() # 角速度标准差
+        }, step=global_step)
+        
         if "episode" in infos:
-            print(f"global_step={global_step}, episodic_return={infos['episode']['r'][0]}")
+            episode_length = infos["episode"]["l"].mean()
+            episode_return = infos["episode"]["r"].mean() / episode_length
+            episode_time = infos["episode"]["t"].mean()
+            print(f"global_step={global_step}, episodic_return={episode_return}, episodic_length={episode_length}, episodic_time={episode_time}")
             # record episode information to wandb
             wandb.log({
-                "charts/episodic_return": infos["episode"]["r"][0],
-                "charts/episodic_length": infos["episode"]["l"][0],
-                "charts/episodic_time": infos["episode"]["t"][0],
+                "charts/episodic_return": episode_return,
+                "charts/episodic_length": episode_length,
+                "charts/episodic_time": episode_time,
                 "charts/epsilon": epsilon
             }, step=global_step)
                 
@@ -129,6 +140,9 @@ def train_pendulum():
         real_next_obs = next_obs.copy()
 
         rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
+        
+        # update obs
+        obs = next_obs
         
         # 训练
         if global_step > config["learning_starts"] and global_step % config["train_frequency"] == 0:
@@ -139,8 +153,8 @@ def train_pendulum():
             
             # 根据动作索引获取Q值, long() 将张量转换为整数类型 data.actions.long() is necessary?
             old_val = q_network(data.observations).gather(1, data.actions).squeeze()
-            # loss = nn.MSELoss()(td_target, old_val)
-            loss = F.smooth_l1_loss(td_target, old_val)
+            loss = F.mse_loss(td_target, old_val)
+            # loss = F.smooth_l1_loss(td_target, old_val)
             
             optimizer.zero_grad()
             loss.backward()
@@ -170,14 +184,14 @@ def train_pendulum():
 def test_pendulum(model_path: str = None):
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    env = InvertedPendulumEnv(max_episode_steps=1000, discrete_action=True, render_mode="human")
+    env = InvertedPendulumEnv(max_episode_steps=500, discrete_action=True, render_mode="human")
     env = SyncVectorEnv([lambda: env])
 
     if model_path:
-        q_network = QNetwork(env).to(device)
+        q_network = QNetwork().to(device)
         q_network.load_state_dict(torch.load(model_path))
-    obs, _ = env.reset()
-    # obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
+    # obs, _ = env.reset()
+    obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
     iters = 0
     while True:
         iters += 1
@@ -193,7 +207,7 @@ def test_pendulum(model_path: str = None):
         env.render()
         
         # 添加小延时使动画更容易观察
-        time.sleep(0.12)
+        time.sleep(0.02)
         
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -203,8 +217,8 @@ def test_pendulum(model_path: str = None):
         if terminated or truncated:
             break
 
-def render_video(global_step, env, model, device):
-    if global_step % 50000 == 0:
+def render_video(global_step, env, model, device, render_freq=10000):
+    if global_step % render_freq == 0:
         frames = []
         obs, _ = env.reset()
         done = False

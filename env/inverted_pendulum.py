@@ -12,10 +12,14 @@ class InvertedPendulumEnv(gym.Env):
     
     metadata = {
         "render_modes": ["human", "rgb_array"],
-        "render_fps": 10,
+        "render_fps": 30,
     }
     
-    def __init__(self, max_episode_steps: int = 200, normalize_state: bool = False, discrete_action: bool = False, render_mode: Optional[str] = None):
+    def __init__(self, 
+                 max_episode_steps: int = 200, 
+                 normalize_state: bool = False, 
+                 discrete_action: bool = False, 
+                 render_mode: Optional[str] = 'human'):
         super(InvertedPendulumEnv, self).__init__()
         
         self.max_episode_steps = max_episode_steps
@@ -97,15 +101,15 @@ class InvertedPendulumEnv(gym.Env):
         alpha_new = alpha + alpha_dot * dt
         
         # 确保角度在[-π,π]范围内
-        alpha_new = ((alpha_new + np.pi) % (2 * np.pi)) - np.pi
+        alpha_new = np.clip(alpha_new, -np.pi, np.pi)
         # 确保角速度在[-15π,15π]范围内
         alpha_dot_new = np.clip(alpha_dot_new, -15*np.pi, 15*np.pi)
         
         # R(s,a) = -s^T diag(5,0.1)s - u² -> R(s, a) = - 5 * alpha^2 - 0.1 * alpha_dot^2 - u^2
-        a = normalize(alpha_new, -np.pi, np.pi)
-        a_dot = normalize(alpha_dot_new, -15*np.pi, 15*np.pi)
-        u = normalize(u, -3, 3)
-        reward = -(5 * a**2 + 0.1 * a_dot**2 + u**2)
+        # a = normalize(alpha_new, -np.pi, np.pi)
+        # a_dot = normalize(alpha_dot_new, -15*np.pi, 15*np.pi)
+        # u = normalize(u, -3, 3)
+        reward = -(5 * alpha_new**2 + 0.1 * alpha_dot_new**2 + u**2)
         
         self.state = np.array([alpha_new, alpha_dot_new], dtype=np.float32)
         
