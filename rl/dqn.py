@@ -28,7 +28,7 @@ class QNetwork(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-def make_env(normalize_state=False, discrete_action=True, render_mode='rgb_array'):
+def make_env(normalize_state=True, discrete_action=True, render_mode='rgb_array'):
     def thunk():
         env = InvertedPendulumEnv(
             normalize_state=normalize_state, 
@@ -73,7 +73,10 @@ def train_pendulum():
     # 创建环境
     envs = SyncVectorEnv([make_env() for _ in range(config["n_envs"])])
 
-    render_env = InvertedPendulumEnv(discrete_action=True, render_mode='rgb_array')
+    eval_env = InvertedPendulumEnv(
+        discrete_action=True, 
+        normalize_state=True, 
+        render_mode='rgb_array')
     
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -175,12 +178,9 @@ def train_pendulum():
         if global_step % config["target_network_frequency"] == 0:
             for target_param, param in zip(target_network.parameters(), q_network.parameters()):
                 target_param.data.copy_(config["tau"] * param.data + (1.0 - config["tau"]) * target_param.data)
-    
-        # Record video to wandb
-        render_video(global_step, render_env, q_network, device)
         
         # eval model
-        eval_reward = eval_model(global_step, render_env, q_network, device)
+        eval_reward = eval_model(global_step, eval_env, q_network, device)
         if eval_reward and eval_reward > best_reward:
             best_reward = eval_reward
             best_model = q_network.state_dict()
@@ -196,14 +196,14 @@ def train_pendulum():
 def test_pendulum(model_path: str = None):
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    env = InvertedPendulumEnv(max_episode_steps=1000, normalize_state=True, discrete_action=True, render_mode="human")
+    env = InvertedPendulumEnv(max_episode_steps=500, normalize_state=True, discrete_action=True, render_mode="human")
     env = SyncVectorEnv([lambda: env])
 
     if model_path:
         q_network = QNetwork().to(device)
         q_network.load_state_dict(torch.load(model_path))
-    # obs, _ = env.reset()
-    obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
+    obs, _ = env.reset()
+    # obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
     iters = 0
     while True:
         iters += 1
@@ -230,42 +230,13 @@ def test_pendulum(model_path: str = None):
         obs = next_obs
         if terminated or truncated:
             break
-
-def render_video(global_step, env, model, device, render_freq=10000):
-    if global_step % render_freq == 0:
-        frames = []
-        obs, _ = env.reset()
-        done = False
-        
-        while not done:
-            # action = render_env.action_space.sample()
-            with torch.no_grad():
-                q_values = model(torch.FloatTensor(obs).to(device))
-                action = torch.argmax(q_values).cpu().numpy()
-            
-            # execute action and record frame
-            obs, reward, terminated, truncated, _ = env.step(action)
-            
-            done = terminated
-            
-            frame = env.render()
-            # (H, W, C) -> (C, H, W)
-            frames.append(frame.transpose(2, 0, 1))
-        
-        video_frames = np.array(frames)
-        # print(f"Video array shape: {video_frames.shape}, dtype: {video_frames.dtype}")
-        wandb.log({
-            "pendulum_video": wandb.Video(
-                video_frames, 
-                fps=10, 
-                format="gif"
-            )
-        }, step=global_step)
         
 def eval_model(global_step, env, model, device, eval_freq=10000):
     if global_step % eval_freq == 0:
-        obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
+        alpha_dot = np.random.uniform(-15*np.pi, 15*np.pi)
+        obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": alpha_dot})
         done = False
+        frames = []
         cumulative_reward = 0
         
         while not done:
@@ -279,9 +250,18 @@ def eval_model(global_step, env, model, device, eval_freq=10000):
             
             done = terminated
             cumulative_reward += reward
+            frame = env.render()
+            # (H, W, C) -> (C, H, W)
+            frames.append(frame.transpose(2, 0, 1))
         
+        video_frames = np.array(frames)
         wandb.log({
-            "eval/episodic_return": cumulative_reward
+            "eval/episodic_return": cumulative_reward,
+            "eval/pendulum_video": wandb.Video(
+                video_frames, 
+                fps=30, 
+                format="gif"
+            ),
         }, step=global_step)
         
         return float(cumulative_reward)
