@@ -9,3 +9,5 @@ runs
 tmp
 models
 wandb
+
+test.py

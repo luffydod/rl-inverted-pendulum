@@ -19,9 +19,9 @@ class QNetwork(nn.Module):
         super().__init__()
         self.network = nn.Sequential(
             nn.Linear(state_dim, 128),
-            nn.Tanh(),
+            nn.LeakyReLU(),
             nn.Linear(128, 64),
-            nn.Tanh(),
+            nn.LeakyReLU(),
             nn.Linear(64, action_dim),
         )
 
@@ -196,7 +196,7 @@ def train_pendulum():
 def test_pendulum(model_path: str = None):
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    env = InvertedPendulumEnv(max_episode_steps=500, discrete_action=True, render_mode="human")
+    env = InvertedPendulumEnv(max_episode_steps=1000, normalize_state=True, discrete_action=True, render_mode="human")
     env = SyncVectorEnv([lambda: env])
 
     if model_path:
@@ -213,8 +213,10 @@ def test_pendulum(model_path: str = None):
                 action = torch.argmax(q_values, dim=1).cpu().numpy()
         else:
             action = np.array([env.single_action_space.sample() for _ in range(env.num_envs)])
+        
         next_obs, reward, terminated, truncated, _ = env.step(action)
         print(f"iter: {iters}, obs: {obs}, action: {action}, reward: {reward}")
+        print(f"alpha: {env.envs[0].state[0]}, alpha_dot: {env.envs[0].state[1]}")
         # 渲染当前状态
         env.render()
         

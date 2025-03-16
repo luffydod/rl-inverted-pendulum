@@ -5,9 +5,6 @@ import numpy as np
 import pygame
 from pygame import gfxdraw
 
-DEFAULT_ALPHA = np.pi
-DEFAULT_ALPHA_DOT = 15 * np.pi
-
 class InvertedPendulumEnv(gym.Env):
     
     metadata = {
@@ -100,8 +97,12 @@ class InvertedPendulumEnv(gym.Env):
         alpha_dot_new = alpha_dot + alpha_ddot * dt
         alpha_new = alpha + alpha_dot * dt
         
-        # 确保角度在[-π,π]范围内
-        alpha_new = np.clip(alpha_new, -np.pi, np.pi)
+        # 处理边界角度更新
+        if alpha_new > np.pi:
+            alpha_new = alpha_new - 2 * np.pi
+        elif alpha_new < -np.pi:
+            alpha_new = alpha_new + 2 * np.pi
+            
         # 确保角速度在[-15π,15π]范围内
         alpha_dot_new = np.clip(alpha_dot_new, -15*np.pi, 15*np.pi)
         
