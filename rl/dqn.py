@@ -28,11 +28,9 @@ class QNetwork(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-def make_env(normalize_state=True, discrete_action=True, render_mode='rgb_array'):
+def make_env(render_mode='rgb_array'):
     def thunk():
         env = InvertedPendulumEnv(
-            normalize_state=normalize_state, 
-            discrete_action=discrete_action, 
             render_mode=render_mode
         )
         env = RecordEpisodeStatistics(env)
@@ -43,10 +41,11 @@ def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
     slope = (end_e - start_e) / duration
     return max(slope * t + start_e, end_e)
 
-def train_pendulum():
+def train_pendulum(project_name: str = "inverted-pendulum",
+                   algorithm: str = "dqn"):
     # 初始化wandb
     run = wandb.init(
-        project="inverted-pendulum",
+        project=f"{project_name}-{algorithm}",
         config={
             "n_envs": 4,
             "total_timesteps": 500000,
@@ -54,10 +53,10 @@ def train_pendulum():
             "buffer_size": 100000,
             "batch_size": 256,
             "gamma": 0.98,
-            "tau": 0.01,     # the target network update rate
-            "target_network_frequency": 100,    # the timesteps it takes to update the target network
+            "tau": 1,     # the target network update rate
+            "target_network_frequency": 1000,    # the timesteps it takes to update the target network
             "learning_starts": 5000,
-            "train_frequency": 10,
+            "train_frequency": 1,
             "start_epsilon": 1.0,
             "end_epsilon": 0.05,
             "exploration_fraction": 0.8, # the fraction of `total-timesteps` it takes from start epsilon to go end epsilon
@@ -155,13 +154,19 @@ def train_pendulum():
         if global_step > config["learning_starts"] and global_step % config["train_frequency"] == 0:
             data = rb.sample(config["batch_size"])
             with torch.no_grad():
-                target_max, _ = target_network(data.next_observations).max(dim=1)
-                td_target = data.rewards.flatten() + config["gamma"] * target_max * (1 - data.dones.flatten())
-            
-            # 根据动作索引获取Q值, long() 将张量转换为整数类型 data.actions.long() is necessary?
-            old_val = q_network(data.observations).gather(1, data.actions).squeeze()
-            loss = F.mse_loss(td_target, old_val)
-            # loss = F.smooth_l1_loss(td_target, old_val)
+                if algorithm == "dqn":
+                    target_max, _ = target_network(data.next_observations).max(dim=1)
+                    target_q_values = data.rewards.flatten() + config["gamma"] * target_max * (1 - data.dones.flatten())
+                elif algorithm == "ddqn":
+                    max_q_actions = q_network(data.next_observations).argmax(dim=1, keepdim=True)
+                    target_q_values = data.rewards.flatten() \
+                        + config["gamma"] \
+                        * target_network(data.next_observations).gather(1, max_q_actions).squeeze() \
+                        * (1 - data.dones.flatten())
+
+            # Q(s_t, a_t)
+            predict_q_values = q_network(data.observations).gather(1, data.actions).squeeze()
+            loss = F.mse_loss(target_q_values, predict_q_values)
             
             optimizer.zero_grad()
             loss.backward()
@@ -171,7 +176,7 @@ def train_pendulum():
             if global_step % 100 == 0:
                 wandb.log({
                     "losses/td_loss": loss.item(),
-                    "losses/q_values": old_val.mean().item()
+                    "losses/q_values": predict_q_values.mean().item()
                 }, step=global_step)
         
         # 更新目标网络
@@ -186,10 +191,11 @@ def train_pendulum():
             best_model = q_network.state_dict()
         
     # 保存模型
-    os.makedirs("models/dqn", exist_ok=True)
-    torch.save(q_network.state_dict(), f"models/dqn/{run.id}.pth")
+    dir_path = f"models/{project_name}/{algorithm}"
+    os.makedirs(dir_path, exist_ok=True)
+    torch.save(q_network.state_dict(), f"{dir_path}/{run.id}.pth")
     if best_model:
-        torch.save(best_model, f"models/dqn/{run.id}_best.pth")
+        torch.save(best_model, f"{dir_path}/{run.id}_best.pth")
     # wandb.save(f"models/dqn/{run.id}.pth")
     wandb.finish()
     

@@ -15,7 +15,7 @@ class InvertedPendulumEnv(gym.Env):
     def __init__(self, 
                  max_episode_steps: int = 200, 
                  normalize_state: bool = False, 
-                 discrete_action: bool = False, 
+                 discrete_action: bool = True, 
                  render_mode: Optional[str] = 'human'):
         super(InvertedPendulumEnv, self).__init__()
         
@@ -107,9 +107,6 @@ class InvertedPendulumEnv(gym.Env):
         alpha_dot_new = np.clip(alpha_dot_new, -15*np.pi, 15*np.pi)
         
         # R(s,a) = -s^T diag(5,0.1)s - u² -> R(s, a) = - 5 * alpha^2 - 0.1 * alpha_dot^2 - u^2
-        # a = normalize(alpha_new, -np.pi, np.pi)
-        # a_dot = normalize(alpha_dot_new, -15*np.pi, 15*np.pi)
-        # u = normalize(u, -3, 3)
         reward = -(5 * alpha_new**2 + 0.1 * alpha_dot_new**2 + u**2)
         
         self.state = np.array([alpha_new, alpha_dot_new], dtype=np.float32)
