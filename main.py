@@ -2,7 +2,7 @@ import argparse
 from rl import train_pendulum, test_pendulum
 
 parser = argparse.ArgumentParser()
-parser.add_argument("-a", "--algorithm", type=str, default="dqn", choices=["dqn", "ddqn", "d3qn"])
+parser.add_argument("-a", "--algorithm", type=str, default="dqn", choices=["dqn", "ddqn", "dueling"])
 parser.add_argument("-m", "--mode", type=str, default="train", choices=["train", "test"])
 parser.add_argument("-p", "--model_path", type=str, default=None)
 args = parser.parse_args()

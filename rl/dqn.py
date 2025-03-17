@@ -28,9 +28,34 @@ class QNetwork(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-def make_env(render_mode='rgb_array'):
+class DuelingQNetwork(nn.Module):
+    def __init__(self, state_dim=2, action_dim=3):
+        super().__init__()
+        self.embedding_network = nn.Sequential(
+            nn.Linear(state_dim, 128),
+            nn.LeakyReLU()
+        )
+        self.v_network = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.LeakyReLU(),
+            nn.Linear(64, 1)
+        )
+        self.a_network = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.LeakyReLU(),
+            nn.Linear(64, action_dim)
+        )
+    
+    def forward(self, x):
+        embedding = self.embedding_network(x)
+        v = self.v_network(embedding)
+        a = self.a_network(embedding)
+        return v + (a - a.mean(dim=1, keepdim=True))
+
+def make_env(render_mode='rgb_array', max_episode_steps=200):
     def thunk():
         env = InvertedPendulumEnv(
+            max_episode_steps=max_episode_steps,
             render_mode=render_mode
         )
         env = RecordEpisodeStatistics(env)
@@ -73,18 +98,20 @@ def train_pendulum(project_name: str = "inverted-pendulum",
     # 创建环境
     envs = SyncVectorEnv([make_env() for _ in range(config["n_envs"])])
 
-    eval_env = InvertedPendulumEnv(
-        discrete_action=True, 
-        normalize_state=True, 
-        render_mode='rgb_array')
+    eval_env = SyncVectorEnv([make_env()])
     
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # 创建网络
-    q_network = QNetwork().to(device)
-    target_network = QNetwork().to(device)
-    target_network.load_state_dict(q_network.state_dict())
+    if algorithm == "dueling":
+        q_network = DuelingQNetwork().to(device)
+        target_network = DuelingQNetwork().to(device)
+        target_network.load_state_dict(q_network.state_dict())
+    else:
+        q_network = QNetwork().to(device)
+        target_network = QNetwork().to(device)
+        target_network.load_state_dict(q_network.state_dict())
     
     # 优化器
     optimizer = optim.Adam(q_network.parameters(), lr=config["learning_rate"])
@@ -158,7 +185,7 @@ def train_pendulum(project_name: str = "inverted-pendulum",
                 if algorithm == "dqn":
                     target_max, _ = target_network(data.next_observations).max(dim=1)
                     target_values = data.rewards.flatten() + config["gamma"] * target_max * (1 - data.dones.flatten())
-                elif algorithm == "ddqn":
+                else:
                     max_q_actions = q_network(data.next_observations).argmax(dim=1, keepdim=True)
                     target_values = data.rewards.flatten() \
                         + config["gamma"] \
@@ -203,14 +230,16 @@ def train_pendulum(project_name: str = "inverted-pendulum",
         
     wandb.finish()
     
-def test_pendulum(model_path: str = None):
+def test_pendulum(algorithm: str = "dqn", model_path: str = None):
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    env = InvertedPendulumEnv(max_episode_steps=500, normalize_state=True, discrete_action=True, render_mode="human")
-    env = SyncVectorEnv([lambda: env])
+    env = SyncVectorEnv([make_env(render_mode="human")])
 
     if model_path:
-        q_network = QNetwork().to(device)
+        if algorithm == "dueling":
+            q_network = DuelingQNetwork().to(device)
+        else:
+            q_network = QNetwork().to(device)
         q_network.load_state_dict(torch.load(model_path))
     obs, _ = env.reset()
     # obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
@@ -227,17 +256,17 @@ def test_pendulum(model_path: str = None):
         next_obs, reward, terminated, truncated, _ = env.step(action)
         print(f"iter: {iters}, obs: {obs}, action: {action}, reward: {reward}")
         print(f"alpha: {env.envs[0].state[0]}, alpha_dot: {env.envs[0].state[1]}")
-        # 渲染当前状态
-        env.render()
         
-        # 添加小延时使动画更容易观察
+        obs = next_obs
+        
+        env.render()[0]
         time.sleep(0.02)
         
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
-        obs = next_obs
+        
         if terminated or truncated:
             break
         
@@ -253,14 +282,14 @@ def eval_model(global_step, env, model, device, eval_freq=10000):
             # action = render_env.action_space.sample()
             with torch.no_grad():
                 q_values = model(torch.FloatTensor(obs).to(device))
-                action = torch.argmax(q_values).cpu().numpy()
+                action = torch.argmax(q_values, dim=1).cpu().numpy()
             
             # execute action and record frame
             obs, reward, terminated, truncated, _ = env.step(action)
             
             done = terminated
             cumulative_reward += reward
-            frame = env.render()
+            frame = env.render()[0]
             # (H, W, C) -> (C, H, W)
             frames.append(frame.transpose(2, 0, 1))
         
@@ -275,5 +304,6 @@ def eval_model(global_step, env, model, device, eval_freq=10000):
         }, step=global_step)
         
         return float(cumulative_reward)
+    
     else:
         return None
