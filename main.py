@@ -11,4 +11,4 @@ if __name__ == "__main__":
     if args.mode == "train":
         train_pendulum(algorithm=args.algorithm)
     elif args.mode == "test":
-        test_pendulum(model_path=args.model_path)
+        test_pendulum(algorithm=args.algorithm, model_path=args.model_path)

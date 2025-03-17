@@ -76,10 +76,10 @@ def train_pendulum(project_name: str = "inverted-pendulum",
             "total_timesteps": 500000,
             "learning_rate": 1e-4,
             "buffer_size": 2000000,
-            "batch_size": 64,
+            "batch_size": 128,
             "gamma": 0.98,
-            "target_network_frequency": 10000,
-            "tau": 1,     # the target network update rate
+            "target_network_frequency": 1000,
+            "tau": 0.4,     # the target network update rate
             "learning_starts": 5000,
             "max_grad_norm": 10,
             "train_frequency": 4,
@@ -233,7 +233,7 @@ def train_pendulum(project_name: str = "inverted-pendulum",
 def test_pendulum(algorithm: str = "dqn", model_path: str = None):
     # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    env = SyncVectorEnv([make_env(render_mode="human")])
+    env = SyncVectorEnv([make_env(render_mode="human", max_episode_steps=1000)])
 
     if model_path:
         if algorithm == "dueling":
@@ -241,9 +241,10 @@ def test_pendulum(algorithm: str = "dqn", model_path: str = None):
         else:
             q_network = QNetwork().to(device)
         q_network.load_state_dict(torch.load(model_path))
-    obs, _ = env.reset()
-    # obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
+    # obs, _ = env.reset()
+    obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
     iters = 0
+    
     while True:
         iters += 1
         if model_path:
@@ -255,7 +256,6 @@ def test_pendulum(algorithm: str = "dqn", model_path: str = None):
         
         next_obs, reward, terminated, truncated, _ = env.step(action)
         print(f"iter: {iters}, obs: {obs}, action: {action}, reward: {reward}")
-        print(f"alpha: {env.envs[0].state[0]}, alpha_dot: {env.envs[0].state[1]}")
         
         obs = next_obs
         
