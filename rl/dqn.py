@@ -49,18 +49,19 @@ def train_pendulum(project_name: str = "inverted-pendulum",
         config={
             "n_envs": 4,
             "total_timesteps": 500000,
-            "learning_rate": 2e-4,
-            "buffer_size": 100000,
-            "batch_size": 256,
+            "learning_rate": 1e-4,
+            "buffer_size": 2000000,
+            "batch_size": 64,
             "gamma": 0.98,
+            "target_network_frequency": 10000,
             "tau": 1,     # the target network update rate
-            "target_network_frequency": 1000,    # the timesteps it takes to update the target network
             "learning_starts": 5000,
-            "train_frequency": 1,
+            "max_grad_norm": 10,
+            "train_frequency": 4,
+            "eval_frequency": 10000,
             "start_epsilon": 1.0,
             "end_epsilon": 0.05,
-            "exploration_fraction": 0.8, # the fraction of `total-timesteps` it takes from start epsilon to go end epsilon
-            "eval_frequency": 10000,
+            "exploration_fraction": 0.2, # the fraction of `total-timesteps` it takes from start epsilon to go end epsilon
         },
         monitor_gym=True
     )
@@ -156,27 +157,30 @@ def train_pendulum(project_name: str = "inverted-pendulum",
             with torch.no_grad():
                 if algorithm == "dqn":
                     target_max, _ = target_network(data.next_observations).max(dim=1)
-                    target_q_values = data.rewards.flatten() + config["gamma"] * target_max * (1 - data.dones.flatten())
+                    target_values = data.rewards.flatten() + config["gamma"] * target_max * (1 - data.dones.flatten())
                 elif algorithm == "ddqn":
                     max_q_actions = q_network(data.next_observations).argmax(dim=1, keepdim=True)
-                    target_q_values = data.rewards.flatten() \
+                    target_values = data.rewards.flatten() \
                         + config["gamma"] \
                         * target_network(data.next_observations).gather(1, max_q_actions).squeeze() \
                         * (1 - data.dones.flatten())
 
             # Q(s_t, a_t)
-            predict_q_values = q_network(data.observations).gather(1, data.actions).squeeze()
-            loss = F.mse_loss(target_q_values, predict_q_values)
+            proximate_values = q_network(data.observations).gather(1, data.actions).squeeze()
+            # loss = F.mse_loss(target_values, proximate_values)
+            loss = F.smooth_l1_loss(target_values, proximate_values)
             
             optimizer.zero_grad()
             loss.backward()
+            # clip gradient norm
+            nn.utils.clip_grad_norm_(q_network.parameters(), config["max_grad_norm"])
             optimizer.step()
             
             # 记录损失
             if global_step % 100 == 0:
                 wandb.log({
                     "losses/td_loss": loss.item(),
-                    "losses/q_values": predict_q_values.mean().item()
+                    "losses/q_values": proximate_values.mean().item()
                 }, step=global_step)
         
         # 更新目标网络
@@ -196,7 +200,7 @@ def train_pendulum(project_name: str = "inverted-pendulum",
     torch.save(q_network.state_dict(), f"{dir_path}/{run.id}.pth")
     if best_model:
         torch.save(best_model, f"{dir_path}/{run.id}_best.pth")
-    # wandb.save(f"models/dqn/{run.id}.pth")
+        
     wandb.finish()
     
 def test_pendulum(model_path: str = None):
