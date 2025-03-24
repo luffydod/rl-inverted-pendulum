@@ -61,7 +61,7 @@ class InvertedPendulumEnv(gym.Env):
         # 定义动作空间 (电压u)
         if self.discrete_action:
             self.discrete_actions = np.linspace(
-                -self.max_voltage, self.max_voltage, self.n_actions
+                -self.max_voltage, self.max_voltage, self.n_actions, dtype=np.float32
             )
             self.action_space = gym.spaces.Discrete(self.n_actions)
             
@@ -79,8 +79,7 @@ class InvertedPendulumEnv(gym.Env):
         if self.discrete_action:
             u = self.discrete_actions[action]
         else:
-            u = np.clip(action, -3.0, 3.0)  # 确保电压在[-3,3]范围内
-        
+            u = action[0]
         self.last_u = u # for rendering
         
         # 实现系统动力学方程

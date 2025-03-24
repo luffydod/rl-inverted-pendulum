@@ -252,7 +252,7 @@ class DQNAgent:
     
     def eval(self, global_step, env, model):
         if global_step % conf.eval_frequency == 0:
-            alpha_dot = np.random.uniform(-15*np.pi, 15*np.pi)
+            alpha_dot = np.random.uniform(-np.pi, np.pi)
             obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": alpha_dot})
             done = False
             frames = []

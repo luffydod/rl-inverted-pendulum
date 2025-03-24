@@ -4,7 +4,7 @@ from dataclasses import dataclass, asdict
 class DQNConfig:
     env_id: str = "inverted-pendulum"
     n_envs: int = 4
-    total_timesteps: int = 50000
+    total_timesteps: int = 500000
     learning_rate: float = 1e-4
     buffer_size: int = 2000000
     batch_size: int = 128
@@ -22,3 +22,27 @@ class DQNConfig:
     
     def get_params_dict(self):
         return asdict(self)
+
+@dataclass
+class DDPGConfig:
+    env_id: str = "inverted-pendulum"
+    n_envs: int = 4
+    total_timesteps: int = 50000
+    learning_rate: float = 1e-4
+    buffer_size: int = int(1e6)
+    batch_size: int = 128
+    gamma: float = 0.98
+    tau: float = 0.005
+    learning_starts: int = 20000
+    max_grad_norm: float = 10
+    policy_frequency: int = 2
+    eval_frequency: int = 10000
+    exploration_noise: float = 0.1
+    """the scale of exploration noise"""
+    noise_clip: float = 0.5
+    """noise clip parameter of the Target Policy Smoothing Regularization"""
+    device: str = "cuda:0"
+    
+    def get_params_dict(self):
+        return asdict(self)
+
