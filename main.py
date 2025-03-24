@@ -1,5 +1,5 @@
 import argparse
-from rl import train_pendulum, test_pendulum
+from rl import DQNAgent
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-a", "--algorithm", type=str, default="dqn", choices=["dqn", "ddqn", "dueling"])
@@ -9,6 +9,8 @@ args = parser.parse_args()
     
 if __name__ == "__main__":
     if args.mode == "train":
-        train_pendulum(algorithm=args.algorithm)
+        agent = DQNAgent(algorithm=args.algorithm)
+        agent.train()
     elif args.mode == "test":
-        test_pendulum(algorithm=args.algorithm, model_path=args.model_path)
+        agent = DQNAgent(algorithm=args.algorithm)
+        agent.test(model_path=args.model_path)
