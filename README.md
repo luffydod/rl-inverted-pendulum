@@ -1,6 +1,33 @@
 # 强化学习任务：倒立摆
 
-[项目地址](https://github.com/luffydod/rl-inverted-pendulum)
+## 项目介绍
+
+实现的场景：
+
+- 倒立摆
+- 冰球游戏（待更新）
+
+当前复现的深度强化学习算法：
+
+- DQN
+- DDQN
+- Dueling DQN
+- DDPG
+
+运行方式：
+
+```bash
+# 默认配置：mode=train, algorithm=dqn, model_path=None
+python main.py
+
+# 使用dueling dqn 训练
+python main.py -a dueling
+
+# 测试，模型路径[models/{project_name}/{algorithm}/{run_id}.pth]
+python main.py -m test -a dueling -p models/inverted-pendulum/dueling/962k5war.pth
+```
+
+超参数配置，见`./config.py`
 
 ## 任务描述
 
