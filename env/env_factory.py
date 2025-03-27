@@ -1,4 +1,4 @@
-from .inverted_pendulum import InvertedPendulumEnv
+from env.inverted_pendulum import InvertedPendulumEnv
 from gymnasium.wrappers import RecordEpisodeStatistics
 from gymnasium.vector import SyncVectorEnv
 

@@ -11,3 +11,4 @@ models
 wandb
 
 test.py
+tests

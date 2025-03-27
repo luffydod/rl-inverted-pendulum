@@ -26,13 +26,13 @@ class DQNConfig:
 @dataclass
 class DDPGConfig:
     env_id: str = "inverted-pendulum"
-    n_envs: int = 4
-    total_timesteps: int = 50000
+    n_envs: int = 8
+    total_timesteps: int = 1000000
     learning_rate: float = 1e-4
     buffer_size: int = int(1e6)
     batch_size: int = 128
     gamma: float = 0.98
-    tau: float = 0.005
+    tau: float = 0.4
     learning_starts: int = 20000
     max_grad_norm: float = 10
     policy_frequency: int = 2
