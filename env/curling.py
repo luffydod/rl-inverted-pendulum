@@ -45,7 +45,7 @@ class CurlingEnv(gym.Env):
         
         self.render_mode = render_mode
 
-        self.last_u = 0
+        self.last_action = 0
         self.screen_dim = 500
         self.screen = None
         self.clock = None
@@ -54,8 +54,8 @@ class CurlingEnv(gym.Env):
         self.state_bounds = {
         }
         
-        low = np.array([0, 0, 0, 0, -self.v_max, -self.v_max], dtype=np.float32)
-        high = np.array([100, 100, 100, 100, self.v_max, self.v_max], dtype=np.float32)
+        low = np.array([self.radius, self.radius, self.radius, self.radius, -self.v_max, -self.v_max], dtype=np.float32)
+        high = np.array([100 - self.radius, 100 - self.radius, 100 - self.radius, 100 - self.radius, self.v_max, self.v_max], dtype=np.float32)
         # 定义状态空间 [x, y, goal_x, goal_y, v_x, v_y]
         self.observation_space = gym.spaces.Box(
             low=low, high=high, dtype=np.float32
@@ -66,11 +66,14 @@ class CurlingEnv(gym.Env):
     
     def step(self, action):
         action = int(action)
+        self.last_action = action
+        
         self.steps += 1
+        f0 = self.f_mapping[action]
         # simulate 10 timesteps
         for _ in range(10):
             # cal force
-            f = -self.mu * self.v * self.v + self.f_mapping[action]
+            f = -self.mu * self.v * np.abs(self.v) + f0
             a = f / self.m
             
             # update position, x = x0 + v0 * t + 0.5 * a * t^2
@@ -80,9 +83,9 @@ class CurlingEnv(gym.Env):
             
             # collision detection
             self.collision_detection()
-            
-            # update history
-            self.curling_pos_history.append(self.curling_pos)
+        
+        # update history
+        self.curling_pos_history.append(self.curling_pos.copy())
         
         terminated = self.steps >= self.max_episode_steps  # 任务自然终止
         truncated = self.steps >= self.max_episode_steps  # 到达最大步数限制
@@ -95,15 +98,13 @@ class CurlingEnv(gym.Env):
         # reset speed
         self.v = np.random.uniform(-10, 10, size=2)
         # reset position
-        self.curling_pos = np.random.uniform(0, 100, size=2)
-        self.goal_pos = np.random.uniform(0, 100, size=2)
+        self.curling_pos = np.random.uniform(self.radius, 100 - self.radius, size=2)
+        self.goal_pos = np.random.uniform(self.radius, 100 - self.radius, size=2)
         
         # clear history
-        self.curling_pos_history = []
-        self.curling_pos_history.append(self.curling_pos)
+        self.curling_pos_history.clear()
+        self.curling_pos_history.append(self.curling_pos.copy())
         
-        if self.render_mode == "human":
-            self.render()
         return self._get_obs(), {}
     
     def _get_obs(self):
@@ -115,11 +116,12 @@ class CurlingEnv(gym.Env):
         return -dist
     
     def collision_detection(self):
-        if self.curling_pos[0] < 0 or self.curling_pos[0] > 100:
+        if self.curling_pos[0] < self.radius or self.curling_pos[0] > 100 - self.radius:
             self.v[0] *= -self.e
-        if self.curling_pos[1] < 0 or self.curling_pos[1] > 100:
+        if self.curling_pos[1] < self.radius or self.curling_pos[1] > 100 - self.radius:
             self.v[1] *= -self.e
-    
+        self.curling_pos.clip(self.radius, 100 - self.radius)
+        
     def render(self):
         if self.screen is None:
             pygame.init()
@@ -137,7 +139,7 @@ class CurlingEnv(gym.Env):
         self.screen.fill((255, 255, 255))
         
         # 坐标转换系数 (游戏世界坐标到屏幕坐标)
-        scale = 3  # 将100*100的游戏区域缩放到300*300
+        scale = self.screen_dim * 0.92 / 100
         offset = (self.screen_dim - 100 * scale) // 2  # 计算居中偏移量
         
         # 绘制边框
@@ -145,7 +147,7 @@ class CurlingEnv(gym.Env):
             self.screen, 
             (0, 0, 0), 
             (offset, offset, 100 * scale, 100 * scale), 
-            2
+            5
         )
         
         # 绘制历史轨迹点
@@ -158,11 +160,71 @@ class CurlingEnv(gym.Env):
         pygame.draw.circle(self.screen, (255, 0, 0), goal_screen_pos, 5)
         
         # 绘制当前冰壶位置
-        if len(self.curling_pos_history) > 0:
-            current_pos = self.curling_pos_history[-1]
-            current_screen_pos = (int(current_pos[0] * scale) + offset, int(current_pos[1] * scale) + offset)
-            pygame.draw.circle(self.screen, (0, 0, 255), current_screen_pos, int(self.radius * scale))
+        current_pos = self.curling_pos_history[-1]
+        current_screen_pos = (int(current_pos[0] * scale) + offset, int(current_pos[1] * scale) + offset)
+        pygame.draw.circle(self.screen, (0, 0, 255), current_screen_pos, 8)
         
+        # 在冰壶位置绘制力和速度方向箭头
+        # 绘制力的方向箭头（绿色）
+        arrow_length = 20  # 箭头长度
+        if hasattr(self, 'last_action'):
+            if self.last_action == 0:  # x轴正向
+                end_pos = (current_screen_pos[0] + arrow_length, current_screen_pos[1])
+            elif self.last_action == 1:  # x轴反向
+                end_pos = (current_screen_pos[0] - arrow_length, current_screen_pos[1])
+            elif self.last_action == 2:  # y轴正向
+                end_pos = (current_screen_pos[0], current_screen_pos[1] + arrow_length)
+            else:  # y轴反向
+                end_pos = (current_screen_pos[0], current_screen_pos[1] - arrow_length)
+            
+            # 绘制力的方向线
+            pygame.draw.line(self.screen, (0, 255, 0), current_screen_pos, end_pos, 2)
+            # 绘制箭头头部
+            arrow_head_length = 8
+            if self.last_action in [0, 1]:  # 水平方向
+                pygame.draw.line(self.screen, (0, 255, 0), 
+                    end_pos, 
+                    (end_pos[0] - arrow_head_length * (1 if self.last_action == 0 else -1), 
+                        end_pos[1] - arrow_head_length), 2)
+                pygame.draw.line(self.screen, (0, 255, 0), 
+                    end_pos, 
+                    (end_pos[0] - arrow_head_length * (1 if self.last_action == 0 else -1), 
+                        end_pos[1] + arrow_head_length), 2)
+            else:  # 垂直方向
+                pygame.draw.line(self.screen, (0, 255, 0), 
+                    end_pos, 
+                    (end_pos[0] - arrow_head_length, 
+                        end_pos[1] - arrow_head_length * (1 if self.last_action == 2 else -1)), 2)
+                pygame.draw.line(self.screen, (0, 255, 0), 
+                    end_pos, 
+                    (end_pos[0] + arrow_head_length, 
+                        end_pos[1] - arrow_head_length * (1 if self.last_action == 2 else -1)), 2)
+        
+        # 绘制速度方向箭头（黄色）
+        v_magnitude = np.linalg.norm(self.v)
+        if v_magnitude > 0.1:  # 只在速度大于阈值时绘制
+            v_normalized = self.v / v_magnitude
+            arrow_length = min(30, v_magnitude * 3)  # 箭头长度随速度变化，但有上限
+            end_pos = (
+                current_screen_pos[0] + v_normalized[0] * arrow_length,
+                current_screen_pos[1] + v_normalized[1] * arrow_length
+            )
+            
+            # 绘制速度方向线
+            pygame.draw.line(self.screen, (255, 255, 0), current_screen_pos, end_pos, 2)
+            
+            # 绘制箭头头部
+            arrow_head_length = 8
+            angle = np.arctan2(v_normalized[1], v_normalized[0])
+            pygame.draw.line(self.screen, (255, 255, 0),
+                end_pos,
+                (end_pos[0] - arrow_head_length * np.cos(angle + np.pi/6),
+                    end_pos[1] - arrow_head_length * np.sin(angle + np.pi/6)), 2)
+            pygame.draw.line(self.screen, (255, 255, 0),
+                end_pos,
+                (end_pos[0] - arrow_head_length * np.cos(angle - np.pi/6),
+                    end_pos[1] - arrow_head_length * np.sin(angle - np.pi/6)), 2)
+
         # 翻转坐标系（pygame的坐标系原点在左上角，我们需要将其转换为左下角）
         self.screen.blit(pygame.transform.flip(self.screen, False, True), (0, 0))
         
