@@ -1,4 +1,5 @@
 from env.inverted_pendulum import InvertedPendulumEnv
+from env.curling import CurlingEnv
 from gymnasium.wrappers import RecordEpisodeStatistics
 from gymnasium.vector import SyncVectorEnv
 
@@ -13,6 +14,11 @@ def make_env(
             env = InvertedPendulumEnv(
                 max_episode_steps=max_episode_steps,
                 discrete_action=discrete_action,
+                render_mode=render_mode
+            )
+        elif env_id == "curling":
+            env = CurlingEnv(
+                max_episode_steps=max_episode_steps,
                 render_mode=render_mode
             )
         else:

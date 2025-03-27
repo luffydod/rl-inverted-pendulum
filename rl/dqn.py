@@ -59,9 +59,9 @@ def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
 
 class DQNAgent:
     def __init__(self, 
-                 project_name: str = "inverted-pendulum",
+                 project_name: str = None,
                  algorithm: str = "dqn"):
-        self.project_name = project_name
+        self.project_name = project_name if project_name else conf.env_id
         self.algorithm = algorithm
     
     def create_model(self, envs):
@@ -276,7 +276,7 @@ class DQNAgent:
             video_frames = np.array(frames)
             wandb.log({
                 "eval/episodic_return": cumulative_reward,
-                "eval/pendulum_video": wandb.Video(
+                "eval/video": wandb.Video(
                     video_frames, 
                     fps=30, 
                     format="gif"

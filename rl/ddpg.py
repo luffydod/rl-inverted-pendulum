@@ -57,9 +57,9 @@ class Actor(nn.Module):
         return self.action_scale * x + self.action_bias
 
 class DDPGAgent:
-    def __init__(self, project_name: str = "inverted-pendulum",
+    def __init__(self, project_name: str = None,
                    algorithm: str = "ddpg"):
-        self.project_name = project_name
+        self.project_name = project_name if project_name else conf.env_id
         self.algorithm = algorithm
 
     def create_model(self, envs, type: str = "actor"):
@@ -266,7 +266,7 @@ class DDPGAgent:
             video_frames = np.array(frames)
             wandb.log({
                 "eval/episodic_return": cumulative_reward,
-                "eval/pendulum_video": wandb.Video(
+                "eval/video": wandb.Video(
                     video_frames, 
                     fps=30, 
                     format="gif"

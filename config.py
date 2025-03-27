@@ -2,7 +2,8 @@ from dataclasses import dataclass, asdict
 
 @dataclass
 class DQNConfig:
-    env_id: str = "inverted-pendulum"
+    env_id: str = "curling"
+    """choice from ['inverted-pendulum', 'curling']"""
     n_envs: int = 4
     total_timesteps: int = 500000
     learning_rate: float = 1e-4
@@ -26,6 +27,7 @@ class DQNConfig:
 @dataclass
 class DDPGConfig:
     env_id: str = "inverted-pendulum"
+    """choice from ['inverted-pendulum', 'curling']"""
     n_envs: int = 8
     total_timesteps: int = 1000000
     learning_rate: float = 1e-4
