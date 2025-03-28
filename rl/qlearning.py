@@ -3,81 +3,23 @@ import sys
 import os
 import numpy as np
 import random
-import torch
-import torch.optim as optim
-import torch.nn as nn
-import torch.nn.functional as F
 import pygame
 import wandb
-from stable_baselines3.common.buffers import ReplayBuffer
 from env import make_envs
-from config import DQNConfig
+from config import QLearningConfig
 
-conf = DQNConfig()
-
-class QNetwork(nn.Module):
-    def __init__(self, envs):
-        super().__init__()
-        self.network = nn.Sequential(
-            nn.Linear(np.array(envs.single_observation_space.shape).prod(), 128),
-            nn.LeakyReLU(),
-            nn.Linear(128, 64),
-            nn.LeakyReLU(),
-            nn.Linear(64, envs.single_action_space.n),
-        )
-
-    def forward(self, x):
-        return self.network(x)
-
-class DuelingQNetwork(nn.Module):
-    def __init__(self, envs):
-        super().__init__()
-        self.embedding_network = nn.Sequential(
-            nn.Linear(np.array(envs.single_observation_space.shape).prod(), 128),
-            nn.LeakyReLU()
-        )
-        self.v_network = nn.Sequential(
-            nn.Linear(128, 64),
-            nn.LeakyReLU(),
-            nn.Linear(64, 1)
-        )
-        self.a_network = nn.Sequential(
-            nn.Linear(128, 64),
-            nn.LeakyReLU(),
-            nn.Linear(64, envs.single_action_space.n)
-        )
-    
-    def forward(self, x):
-        embedding = self.embedding_network(x)
-        v = self.v_network(embedding)
-        a = self.a_network(embedding)
-        return v + (a - a.mean(dim=1, keepdim=True))
+conf = QLearningConfig()
 
 def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
     slope = (end_e - start_e) / duration
     return max(slope * t + start_e, end_e)
 
-class DQNAgent:
+class QLearningAgent:
     def __init__(self, 
                  project_name: str = None,
-                 algorithm: str = "dqn"):
+                 algorithm: str = "qlearning"):
         self.project_name = project_name if project_name else conf.env_id
         self.algorithm = algorithm
-    
-    def create_model(self, envs):
-        if self.algorithm == "dueling":
-            q_network = DuelingQNetwork(envs).to(conf.device)
-        else:
-            q_network = QNetwork(envs).to(conf.device)
-        return q_network
-    
-    def load_model(self, model_path: str, envs):
-        if self.algorithm == "dueling":
-            q_network = DuelingQNetwork(envs).to(conf.device)
-        else:
-            q_network = QNetwork(envs).to(conf.device)
-        q_network.load_state_dict(torch.load(model_path))
-        return q_network
     
     def train(self):
         # wandb init
@@ -207,13 +149,6 @@ class DQNAgent:
             if eval_reward and eval_reward > best_reward:
                 best_reward = eval_reward
                 best_model = q_network.state_dict()
-            
-        # 保存模型
-        dir_path = f"models/{self.project_name}/{self.algorithm}"
-        os.makedirs(dir_path, exist_ok=True)
-        torch.save(q_network.state_dict(), f"{dir_path}/{run.id}.pth")
-        if best_model:
-            torch.save(best_model, f"{dir_path}/{run.id}_best.pth")
             
         wandb.finish()
     

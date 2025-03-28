@@ -48,3 +48,11 @@ class DDPGConfig:
     def get_params_dict(self):
         return asdict(self)
 
+@dataclass
+class QLearningConfig:
+    env_id: str = "curling"
+    """choice from ['inverted-pendulum', 'curling']"""
+    n_envs: int = 4
+    total_timesteps: int = 500000
+    learning_rate: float = 1e-4
+    

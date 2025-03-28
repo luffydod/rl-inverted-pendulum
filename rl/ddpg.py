@@ -206,7 +206,7 @@ class DDPGAgent:
         wandb.finish()
 
     def test(self, model_path: str = None):
-        env = make_envs(conf.env_id, num_envs=1, render_mode="human", max_episode_steps=1000)
+        env = make_envs(conf.env_id, num_envs=1, render_mode="human")
 
         actor = self.load_model(env, model_path, type="actor")
         # obs, _ = env.reset()

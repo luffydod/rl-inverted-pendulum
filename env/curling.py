@@ -3,6 +3,9 @@ import gymnasium as gym
 import numpy as np
 import pygame
 
+DISCRETE_POS = 10
+DISCRETE_V = 5
+
 class CurlingEnv(gym.Env):
     
     metadata = {
@@ -12,10 +15,13 @@ class CurlingEnv(gym.Env):
     
     def __init__(self, 
                  max_episode_steps: int = 300,
-                 render_mode: Optional[str] = 'human'):
+                 render_mode: Optional[str] = 'human',
+                 discrete_state: bool = False):
         super(CurlingEnv, self).__init__()
         
         self.max_episode_steps = max_episode_steps
+        self.discrete_state = discrete_state
+        
         self.steps = 0
         # curling radius
         self.radius = 1.0
@@ -28,7 +34,7 @@ class CurlingEnv(gym.Env):
         # time step
         self.t = 0.01
         # max speed
-        self.v_max = 10.0
+        self.v_max = 30     
         # v = [v_x, v_y]
         self.v = np.zeros(2, dtype=np.float32)
         # f-mapping
@@ -57,9 +63,19 @@ class CurlingEnv(gym.Env):
         low = np.array([self.radius, self.radius, self.radius, self.radius, -self.v_max, -self.v_max], dtype=np.float32)
         high = np.array([100 - self.radius, 100 - self.radius, 100 - self.radius, 100 - self.radius, self.v_max, self.v_max], dtype=np.float32)
         # 定义状态空间 [x, y, goal_x, goal_y, v_x, v_y]
-        self.observation_space = gym.spaces.Box(
-            low=low, high=high, dtype=np.float32
-        )
+        if self.discrete_state:
+            self.observation_space = gym.spaces.MultiDiscrete(
+                [DISCRETE_POS, 
+                 DISCRETE_POS, 
+                 DISCRETE_POS, 
+                 DISCRETE_POS, 
+                 DISCRETE_V, 
+                 DISCRETE_V]
+            )
+        else:
+            self.observation_space = gym.spaces.Box(
+                low=low, high=high, dtype=np.float32
+            )
     
         # 定义动作空间 (+x, -x, +y, -y)
         self.action_space = gym.spaces.Discrete(n=4)
@@ -108,8 +124,32 @@ class CurlingEnv(gym.Env):
         return self._get_obs(), {}
     
     def _get_obs(self):
-        return np.concatenate([self.curling_pos, self.goal_pos, self.v], dtype=np.float32)
+        if self.discrete_state:
+            # 将连续状态转换为离散状态
+            pos_bins = np.linspace(self.radius, 100 - self.radius, DISCRETE_POS)
+            vel_bins = np.linspace(-self.v_max, self.v_max, DISCRETE_V)
+            
+            discrete_state = np.array([
+                np.digitize(self.curling_pos[0], pos_bins) - 1,
+                np.digitize(self.curling_pos[1], pos_bins) - 1,
+                np.digitize(self.goal_pos[0], pos_bins) - 1,
+                np.digitize(self.goal_pos[1], pos_bins) - 1,
+                np.digitize(self.v[0], vel_bins) - 1,
+                np.digitize(self.v[1], vel_bins) - 1
+            ], dtype=np.int32)
+            return discrete_state
+        else:
+            return np.concatenate([self.curling_pos, self.goal_pos, self.v], dtype=np.float32)
     
+    def _get_tables(self):
+        return np.zeros((4,
+                         DISCRETE_POS, 
+                         DISCRETE_POS, 
+                         DISCRETE_POS,
+                         DISCRETE_POS,
+                         DISCRETE_V,
+                         DISCRETE_V), dtype=np.float32)
+        
     def _get_reward(self):
         # euclidean distance
         dist = np.linalg.norm(self.curling_pos - self.goal_pos)
