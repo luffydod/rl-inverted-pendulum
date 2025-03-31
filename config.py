@@ -4,20 +4,20 @@ from dataclasses import dataclass, asdict
 class DQNConfig:
     env_id: str = "curling"
     """choice from ['inverted-pendulum', 'curling']"""
-    n_envs: int = 4
+    n_envs: int = 1
     total_timesteps: int = 500000
-    learning_rate: float = 1e-4
-    buffer_size: int = 2000000
+    learning_rate: float = 3e-4
+    buffer_size: int = 100000
     batch_size: int = 128
     gamma: float = 0.98
-    target_network_frequency: int = 1000
+    target_network_frequency: int = 500
     tau: float = 0.4
     learning_starts: int = 5000
     max_grad_norm: float = 10
     train_frequency: int = 4
     eval_frequency: int = 10000
     start_epsilon: float = 1.0
-    end_epsilon: float = 0.05
+    end_epsilon: float = 0.01
     exploration_fraction: float = 0.2
     device: str = "cuda:0"
     
@@ -27,7 +27,7 @@ class DQNConfig:
 @dataclass
 class DDPGConfig:
     env_id: str = "inverted-pendulum"
-    """choice from ['inverted-pendulum', 'curling']"""
+    """choice from ['inverted-pendulum',]"""
     n_envs: int = 8
     total_timesteps: int = 1000000
     learning_rate: float = 1e-4
@@ -50,14 +50,15 @@ class DDPGConfig:
 
 @dataclass
 class QLearningConfig:
-    env_id: str = "inverted-pendulum"
+    env_id: str = "curling"
     """choice from ['inverted-pendulum', 'curling']"""
     n_envs: int = 1
-    gamma: float = 0.98
+    gamma: float = 0.9
     total_timesteps: int = 500000
-    learning_rate: float = 1e-3
-    start_epsilon: float = 0.8
-    end_epsilon: float = 0.05
+    eval_frequency: int = 10000
+    learning_rate: float = 0.1
+    start_epsilon: float = 1
+    end_epsilon: float = 0.01
     exploration_fraction: float = 0.4
     
     def get_params_dict(self):

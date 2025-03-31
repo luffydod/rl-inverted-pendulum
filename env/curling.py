@@ -21,7 +21,8 @@ class CurlingEnv(gym.Env):
         
         self.max_episode_steps = max_episode_steps
         self.discrete_state = discrete_state
-        
+        if self.discrete_state:
+            self.q_table = self._get_tables()
         self.steps = 0
         # curling radius
         self.radius = 1.0

@@ -135,7 +135,7 @@ class DDPGAgent:
             
             if "episode" in infos:
                 episode_length = infos["episode"]["l"].mean()
-                episode_return = infos["episode"]["r"].mean() / episode_length
+                episode_return = infos["episode"]["r"].mean()
                 episode_time = infos["episode"]["t"].mean()
                 print(f"global_step={global_step}, episodic_return={episode_return}, episodic_length={episode_length}, episodic_time={episode_time}")
                 # record episode information to wandb
@@ -200,7 +200,7 @@ class DDPGAgent:
         dir_path = f"models/{self.project_name}/{self.algorithm}"
         os.makedirs(dir_path, exist_ok=True)
         torch.save(actor.state_dict(), f"{dir_path}/{run.id}.pth")
-        if best_model:
+        if best_model is not None:
             torch.save(best_model, f"{dir_path}/{run.id}_best.pth")
             
         wandb.finish()
@@ -241,8 +241,7 @@ class DDPGAgent:
     
     def eval(self, global_step, env, model):
         if global_step % conf.eval_frequency == 0:
-            alpha_dot = np.random.uniform(-np.pi, np.pi)
-            obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": alpha_dot})
+            obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
             done = False
             frames = []
             cumulative_reward = 0

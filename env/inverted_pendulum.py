@@ -5,7 +5,7 @@ import numpy as np
 import pygame
 from pygame import gfxdraw
 
-DISCRETE_ALPHA = 500
+DISCRETE_ALPHA = 200
 DISCRETE_ALPHA_DOT = 200
 
 class InvertedPendulumEnv(gym.Env):
@@ -16,7 +16,7 @@ class InvertedPendulumEnv(gym.Env):
     }
     
     def __init__(self, 
-                 max_episode_steps: int = 200,
+                 max_episode_steps: int = 300,
                  render_mode: Optional[str] = 'human',
                  discrete_action: bool = True,
                  discrete_state: bool = False,

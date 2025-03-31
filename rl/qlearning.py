@@ -1,6 +1,7 @@
 import time
 import sys
 import os
+import math
 import numpy as np
 import random
 import pygame
@@ -13,6 +14,10 @@ conf = QLearningConfig()
 def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
     slope = (end_e - start_e) / duration
     return max(slope * t + start_e, end_e)
+
+def exponential_schedule(start_e: float, end_e: float, duration: int, t: int):
+    lambda_ = math.log(start_e / end_e) / duration
+    return max(end_e, end_e + (start_e - end_e) * math.exp(-lambda_ * t))
 
 class QLearningAgent:
     def __init__(self, 
@@ -31,50 +36,63 @@ class QLearningAgent:
         
         # 创建环境
         env = make_envs(conf.env_id, conf.n_envs, discrete_action=True, discrete_state=True)
+        eval_env = make_envs(conf.env_id, 1, discrete_action=True, discrete_state=True)
+        
+        best_reward = -float('inf')
+        best_model = None
         
         # Q_table, shape=(action_dim, len_s1, len_s2...)
         self.Q_table = env.get_attr("q_table")[0]
         print(f"Q_table shape=", self.Q_table.shape)
         
-        # 训练循环
         obs, _ = env.reset()
         
         for global_step in range(conf.total_timesteps):
-            # 计算epsilon
-            epsilon = linear_schedule(
+            # epsilon = linear_schedule(
+            #     start_e=conf.start_epsilon,
+            #     end_e=conf.end_epsilon,
+            #     duration=conf.exploration_fraction * conf.total_timesteps,
+            #     t=global_step
+            # )
+            epsilon = exponential_schedule(
                 start_e=conf.start_epsilon,
                 end_e=conf.end_epsilon,
                 duration=conf.exploration_fraction * conf.total_timesteps,
                 t=global_step
             )
             
-            # epsilon-greedy选择动作
             if random.random() < epsilon:
                 action = np.array([env.single_action_space.sample()])
             else:
-                # 将obs转换为Q表的索引
                 full_index = [slice(None)] + list(obs[0].astype(np.int32))
                 action = np.array([np.argmax(self.Q_table[tuple(full_index)])])
             
-            # 执行动作
             next_obs, reward, terminated, truncated, info = env.step(action)
             
-            # Q-learning更新
+            if "episode" in info:
+                episode_length = info["episode"]["l"].mean()
+                episode_return = info["episode"]["r"].mean()
+                episode_time = info["episode"]["t"].mean()
+                print(f"global_step={global_step}, episodic_return={episode_return}, episodic_length={episode_length}, episodic_time={episode_time}")
+                # record episode information to wandb
+                wandb.log({
+                    "charts/episodic_return": episode_return,
+                    "charts/episodic_length": episode_length,
+                    "charts/episodic_time": episode_time,
+                }, step=global_step)
+                
             current_q_indices = [int(action[0])] + list(obs[0].astype(np.int32))
             next_state_indices = [slice(None)] + list(next_obs[0].astype(np.int32))
             
-            # print("current_q_indices = ", current_q_indices)
-            # 获取当前Q值
             current_q = self.Q_table[tuple(current_q_indices)]
             
-            # 获取下一状态的最大Q值
             next_max_q = np.max(self.Q_table[tuple(next_state_indices)])
             
-            # Q-learning更新公式
+            # update q value
             self.Q_table[tuple(current_q_indices)] = current_q + \
                 conf.learning_rate * (reward[0] + conf.gamma * next_max_q * (1 - terminated) - current_q)
             
-            # 记录数据
+            # record
             if global_step % 100 == 0:
                 wandb.log({
                     "training/avg_reward": reward.mean(),
@@ -82,17 +100,22 @@ class QLearningAgent:
                     "training/q_value": current_q
                 }, step=global_step)
             
-            # 更新状态
+            # update obs
             obs = next_obs
             
-            if terminated or truncated:
-                obs, _ = env.reset()
+            # eval model
+            eval_reward = self.eval(global_step, eval_env)
+            if eval_reward and eval_reward > best_reward:
+                best_reward = eval_reward
+                best_model = self.Q_table.copy()
+            
         
         # save model
         dir_path = f"models/{self.project_name}/{self.algorithm}"
         os.makedirs(dir_path, exist_ok=True)
         np.save(f"{dir_path}/{run.id}.npy", self.Q_table)
-        
+        if best_model is not None:
+            np.save(f"{dir_path}/{run.id}_best.npy", best_model)
         wandb.finish()
     
     def test(self, model_path: str = None):
@@ -103,7 +126,6 @@ class QLearningAgent:
         obs, _ = env.reset()
         
         while True:
-            # 根据Q表选择动作
             full_index = [slice(None)] + list(obs[0].astype(np.int32))
             action = np.array([np.argmax(self.Q_table[tuple(full_index)])])
             
@@ -122,3 +144,40 @@ class QLearningAgent:
             
             if terminated or truncated:
                 break
+
+    def eval(self, global_step, env):
+        if global_step % conf.eval_frequency == 0:
+            obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
+            done = False
+            frames = []
+            cumulative_reward = 0
+            
+            while not done:
+                full_index = [slice(None)] + list(obs[0].astype(np.int32))
+                action = np.array([np.argmax(self.Q_table[tuple(full_index)])])
+                
+                next_obs, reward, terminated, truncated, _ = env.step(action)
+                # print(f"obs: {obs}, action: {action}, reward: {reward}")
+                
+                obs = next_obs
+                
+                done = terminated
+                cumulative_reward += reward
+                frame = env.render()[0]
+                # (H, W, C) -> (C, H, W)
+                frames.append(frame.transpose(2, 0, 1))
+            
+            video_frames = np.array(frames)
+            wandb.log({
+                "eval/episodic_return": cumulative_reward,
+                "eval/video": wandb.Video(
+                    video_frames, 
+                    fps=30, 
+                    format="gif"
+                ),
+            }, step=global_step)
+            
+            return float(cumulative_reward)
+        
+        else:
+            return None
