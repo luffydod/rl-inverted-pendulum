@@ -12,12 +12,14 @@ def make_env(
     def thunk():
         if env_id == "inverted-pendulum":
             env = InvertedPendulumEnv(
+                render_mode=render_mode,
                 discrete_action=discrete_action,
-                render_mode=render_mode
+                discrete_state=discrete_state
             )
         elif env_id == "curling":
             env = CurlingEnv(
-                render_mode=render_mode
+                render_mode=render_mode,
+                discrete_state=discrete_state
             )
         else:
             raise ValueError(f"Invalid environment ID: {env_id}")

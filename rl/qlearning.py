@@ -29,37 +29,18 @@ class QLearningAgent:
             monitor_gym=True
         )
         
-        best_reward = -float('inf')
-        best_model = None
+        # 创建环境
+        env = make_envs(conf.env_id, conf.n_envs, discrete_action=True, discrete_state=True)
         
-        # create envs
-        envs = make_envs(conf.env_id, conf.n_envs)
-
-        eval_env = make_envs(conf.env_id, 1)
+        # Q_table, shape=(action_dim, len_s1, len_s2...)
+        self.Q_table = env.get_attr("q_table")[0]
+        print(f"Q_table shape=", self.Q_table.shape)
         
-        # create network
-        q_network = self.create_model(envs)
-        target_network = self.create_model(envs)
-        target_network.load_state_dict(q_network.state_dict())
-        
-        # optimizer
-        optimizer = optim.Adam(q_network.parameters(), lr=conf.learning_rate)
-        
-        # replay buffer
-        rb = ReplayBuffer(
-            conf.buffer_size,
-            envs.single_observation_space,
-            envs.single_action_space,
-            conf.device,
-            n_envs=envs.num_envs,
-            handle_timeout_termination=False,
-        )
-        
-        # (n_envs, state_dim)
-        obs, _ = envs.reset()
+        # 训练循环
+        obs, _ = env.reset()
         
         for global_step in range(conf.total_timesteps):
-            # calculate epsilon
+            # 计算epsilon
             epsilon = linear_schedule(
                 start_e=conf.start_epsilon,
                 end_e=conf.end_epsilon,
@@ -67,110 +48,67 @@ class QLearningAgent:
                 t=global_step
             )
             
-            # 选择动作
+            # epsilon-greedy选择动作
             if random.random() < epsilon:
-                actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
+                action = np.array([env.single_action_space.sample()])
             else:
-                with torch.no_grad():
-                    q_values = q_network(torch.Tensor(obs).to(conf.device))
-                    actions = torch.argmax(q_values, dim=1).cpu().numpy()
+                # 将obs转换为Q表的索引
+                full_index = [slice(None)] + list(obs[0].astype(np.int32))
+                action = np.array([np.argmax(self.Q_table[tuple(full_index)])])
             
             # 执行动作
-            next_obs, rewards, terminations, truncations, infos = envs.step(actions)
-
-            wandb.log({
-                "training/avg_reward": rewards.mean(),
-                "training/state_alpha": obs[:, 0].mean(),      # 角度均值
-                "training/state_alpha_dot": obs[:, 1].mean(),  # 角速度均值
-                "training/state_alpha_std": obs[:, 0].std(),   # 角度标准差
-                "training/state_alpha_dot_std": obs[:, 1].std() # 角速度标准差
-            }, step=global_step)
+            next_obs, reward, terminated, truncated, info = env.step(action)
             
-            if "episode" in infos:
-                episode_length = infos["episode"]["l"].mean()
-                episode_return = infos["episode"]["r"].mean() / episode_length
-                episode_time = infos["episode"]["t"].mean()
-                print(f"global_step={global_step}, episodic_return={episode_return}, episodic_length={episode_length}, episodic_time={episode_time}")
-                # record episode information to wandb
+            # Q-learning更新
+            current_q_indices = [int(action[0])] + list(obs[0].astype(np.int32))
+            next_state_indices = [slice(None)] + list(next_obs[0].astype(np.int32))
+            
+            # print("current_q_indices = ", current_q_indices)
+            # 获取当前Q值
+            current_q = self.Q_table[tuple(current_q_indices)]
+            
+            # 获取下一状态的最大Q值
+            next_max_q = np.max(self.Q_table[tuple(next_state_indices)])
+            
+            # Q-learning更新公式
+            self.Q_table[tuple(current_q_indices)] = current_q + \
+                conf.learning_rate * (reward[0] + conf.gamma * next_max_q * (1 - terminated) - current_q)
+            
+            # 记录数据
+            if global_step % 100 == 0:
                 wandb.log({
-                    "charts/episodic_return": episode_return,
-                    "charts/episodic_length": episode_length,
-                    "charts/episodic_time": episode_time,
-                    "charts/epsilon": epsilon
+                    "training/avg_reward": reward.mean(),
+                    "training/epsilon": epsilon,
+                    "training/q_value": current_q
                 }, step=global_step)
-                    
-            # 记录回放缓冲区
-            real_next_obs = next_obs.copy()
-
-            rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
             
-            # update obs
+            # 更新状态
             obs = next_obs
             
-            # 训练
-            if global_step > conf.learning_starts and global_step % conf.train_frequency == 0:
-                data = rb.sample(conf.batch_size)
-                with torch.no_grad():
-                    if self.algorithm == "dqn":
-                        target_max, _ = target_network(data.next_observations).max(dim=1)
-                        target_values = data.rewards.flatten() + conf.gamma * target_max * (1 - data.dones.flatten())
-                    else:
-                        max_q_actions = q_network(data.next_observations).argmax(dim=1, keepdim=True)
-                        target_values = data.rewards.flatten() \
-                            + conf.gamma \
-                            * target_network(data.next_observations).gather(1, max_q_actions).squeeze() \
-                            * (1 - data.dones.flatten())
-
-                # Q(s_t, a_t)
-                proximate_values = q_network(data.observations).gather(1, data.actions).squeeze()
-                # loss = F.mse_loss(target_values, proximate_values)
-                loss = F.smooth_l1_loss(target_values, proximate_values)
-                
-                optimizer.zero_grad()
-                loss.backward()
-                # clip gradient norm
-                nn.utils.clip_grad_norm_(q_network.parameters(), conf.max_grad_norm)
-                optimizer.step()
-                
-                # 记录损失
-                if global_step % 100 == 0:
-                    wandb.log({
-                        "losses/td_loss": loss.item(),
-                        "losses/q_values": proximate_values.mean().item()
-                    }, step=global_step)
-            
-            # 更新目标网络
-            if global_step % conf.target_network_frequency == 0:
-                for target_param, param in zip(target_network.parameters(), q_network.parameters()):
-                    target_param.data.copy_(conf.tau * param.data + (1.0 - conf.tau) * target_param.data)
-            
-            # eval model
-            eval_reward = self.eval(global_step, eval_env, q_network)
-            if eval_reward and eval_reward > best_reward:
-                best_reward = eval_reward
-                best_model = q_network.state_dict()
-            
+            if terminated or truncated:
+                obs, _ = env.reset()
+        
+        # save model
+        dir_path = f"models/{self.project_name}/{self.algorithm}"
+        os.makedirs(dir_path, exist_ok=True)
+        np.save(f"{dir_path}/{run.id}.npy", self.Q_table)
+        
         wandb.finish()
     
     def test(self, model_path: str = None):
         env = make_envs(conf.env_id, num_envs=1, render_mode="human")
-
-        q_network = self.load_model(model_path, env)
-        # obs, _ = env.reset()
-        obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
-        iters = 0
+        if model_path:
+            self.Q_table = np.load(model_path)
+        
+        obs, _ = env.reset()
         
         while True:
-            iters += 1
-            if model_path:
-                with torch.no_grad():
-                    q_values = q_network(torch.FloatTensor(obs).to(conf.device))
-                    action = torch.argmax(q_values, dim=1).cpu().numpy()
-            else:
-                action = np.array([env.single_action_space.sample() for _ in range(env.num_envs)])
+            # 根据Q表选择动作
+            full_index = [slice(None)] + list(obs[0].astype(np.int32))
+            action = np.array([np.argmax(self.Q_table[tuple(full_index)])])
             
             next_obs, reward, terminated, truncated, _ = env.step(action)
-            print(f"iter: {iters}, obs: {obs}, action: {action}, reward: {reward}")
+            print(f"obs: {obs}, action: {action}, reward: {reward}")
             
             obs = next_obs
             
@@ -184,41 +122,3 @@ class QLearningAgent:
             
             if terminated or truncated:
                 break
-    
-    def eval(self, global_step, env, model):
-        if global_step % conf.eval_frequency == 0:
-            alpha_dot = np.random.uniform(-np.pi, np.pi)
-            obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": alpha_dot})
-            done = False
-            frames = []
-            cumulative_reward = 0
-            
-            while not done:
-                # action = render_env.action_space.sample()
-                with torch.no_grad():
-                    q_values = model(torch.FloatTensor(obs).to(conf.device))
-                    action = torch.argmax(q_values, dim=1).cpu().numpy()
-                
-                # execute action and record frame
-                obs, reward, terminated, truncated, _ = env.step(action)
-                
-                done = terminated
-                cumulative_reward += reward
-                frame = env.render()[0]
-                # (H, W, C) -> (C, H, W)
-                frames.append(frame.transpose(2, 0, 1))
-            
-            video_frames = np.array(frames)
-            wandb.log({
-                "eval/episodic_return": cumulative_reward,
-                "eval/video": wandb.Video(
-                    video_frames, 
-                    fps=30, 
-                    format="gif"
-                ),
-            }, step=global_step)
-            
-            return float(cumulative_reward)
-        
-        else:
-            return None

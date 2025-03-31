@@ -5,6 +5,9 @@ import numpy as np
 import pygame
 from pygame import gfxdraw
 
+DISCRETE_ALPHA = 500
+DISCRETE_ALPHA_DOT = 200
+
 class InvertedPendulumEnv(gym.Env):
     
     metadata = {
@@ -13,10 +16,11 @@ class InvertedPendulumEnv(gym.Env):
     }
     
     def __init__(self, 
-                 max_episode_steps: int = 200, 
-                 normalize_state: bool = False, 
-                 discrete_action: bool = True, 
-                 render_mode: Optional[str] = 'human'):
+                 max_episode_steps: int = 200,
+                 render_mode: Optional[str] = 'human',
+                 discrete_action: bool = True,
+                 discrete_state: bool = False,
+                 ):
         super(InvertedPendulumEnv, self).__init__()
         
         self.max_episode_steps = max_episode_steps
@@ -33,8 +37,10 @@ class InvertedPendulumEnv(gym.Env):
         
         self.render_mode = render_mode
         self.discrete_action = discrete_action
-        self.normalize_state = normalize_state
-
+        self.discrete_state = discrete_state
+        if self.discrete_state:
+            self.q_table = self._get_tables()
+            
         self.last_u = 0
         self.screen_dim = 500
         self.screen = None
@@ -49,14 +55,9 @@ class InvertedPendulumEnv(gym.Env):
         
         high = np.array([np.pi, 15*np.pi], dtype=np.float32)
         # 定义状态空间 [角度α, 角速度α_dot]
-        if self.normalize_state:
-            self.observation_space = gym.spaces.Box(
-                low=-np.ones_like(high), high=np.ones_like(high), dtype=np.float32
-            )
-        else:
-            self.observation_space = gym.spaces.Box(
-                low=-high, high=high, dtype=np.float32
-            )
+        self.observation_space = gym.spaces.Box(
+            low=-high, high=high, dtype=np.float32
+        )
         
         # 定义动作空间 (电压u)
         if self.discrete_action:
@@ -130,19 +131,24 @@ class InvertedPendulumEnv(gym.Env):
             self.render()
         return self._get_obs(), {}
     
-    def _normalize_state(self, state):
-        alpha, alpha_dot = state
-        norm_alpha = normalize(alpha, *self.state_bounds['alpha'])
-        norm_alpha_dot = normalize(alpha_dot, *self.state_bounds['alpha_dot'])
-        return np.array([norm_alpha, norm_alpha_dot], dtype=np.float32)
-    
     def _get_obs(self):
-        if self.normalize_state:
-            return self._normalize_state(self.state)
+        if self.discrete_state:
+            alpha_bins = np.linspace(*self.state_bounds['alpha'], DISCRETE_ALPHA)
+            alpha_dot_bins = np.linspace(*self.state_bounds['alpha_dot'], DISCRETE_ALPHA_DOT)
+            discrete_state = np.array([
+                    np.digitize(self.state[0], alpha_bins) - 1,
+                    np.digitize(self.state[1], alpha_dot_bins) - 1,
+                ],dtype=np.int32)
+            return discrete_state
         else:
             alpha, alpha_dot = self.state
             return np.array([alpha, alpha_dot], dtype=np.float32)
     
+    def _get_tables(self):
+        return np.zeros((3,
+                         DISCRETE_ALPHA,
+                         DISCRETE_ALPHA_DOT), dtype=np.float32)
+        
     def render(self):
         if self.screen is None:
             pygame.init()
@@ -233,13 +239,3 @@ class InvertedPendulumEnv(gym.Env):
             pygame.display.quit()
             pygame.quit()
             self.isopen = False
-            
-            
-def normalize(x, min_val, max_val):
-    # [-1, 1]
-    return 2 * (x - min_val) / (max_val - min_val) - 1
-
-def denormalize(x, min_val, max_val):
-    # [-1, 1] -> [min_val, max_val]
-    return 0.5 * (x + 1) * (max_val - min_val) + min_val
-        
