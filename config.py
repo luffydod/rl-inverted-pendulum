@@ -2,12 +2,12 @@ from dataclasses import dataclass, asdict
 
 @dataclass
 class DQNConfig:
-    env_id: str = "curling"
+    env_id: str = "inverted-pendulum"
     """choice from ['inverted-pendulum', 'curling']"""
-    n_envs: int = 1
+    n_envs: int = 2
     total_timesteps: int = 500000
     learning_rate: float = 3e-4
-    buffer_size: int = 100000
+    buffer_size: int = 50000
     batch_size: int = 128
     gamma: float = 0.98
     target_network_frequency: int = 500

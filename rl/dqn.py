@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import pygame
 import wandb
 from stable_baselines3.common.buffers import ReplayBuffer
+from rl.per import PrioritizedExperienceReplayBuffer
 from env import make_envs
 from config import DQNConfig
 
@@ -60,9 +61,11 @@ def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
 class DQNAgent:
     def __init__(self, 
                  project_name: str = None,
-                 algorithm: str = "dqn"):
+                 algorithm: str = "dqn",
+                 buffer_type: str = "per"):
         self.project_name = project_name if project_name else conf.env_id
         self.algorithm = algorithm
+        self.buffer_type = buffer_type
     
     def create_model(self, envs):
         if self.algorithm == "dueling":
@@ -103,15 +106,26 @@ class DQNAgent:
         # optimizer
         optimizer = optim.Adam(q_network.parameters(), lr=conf.learning_rate)
         
-        # replay buffer
-        rb = ReplayBuffer(
-            conf.buffer_size,
-            envs.single_observation_space,
-            envs.single_action_space,
-            conf.device,
-            n_envs=envs.num_envs,
-            handle_timeout_termination=False,
-        )
+        if self.buffer_type == "per":
+            # prioritized experience replay buffer
+            rb = PrioritizedExperienceReplayBuffer(
+                conf.buffer_size,
+                envs.single_observation_space,
+                envs.single_action_space,
+                conf.device,
+                n_envs=envs.num_envs,
+                handle_timeout_termination=False,
+            )
+        else:
+            # replay buffer
+            rb = ReplayBuffer(
+                conf.buffer_size,
+                envs.single_observation_space,
+                envs.single_action_space,
+                conf.device,
+                n_envs=envs.num_envs,
+                handle_timeout_termination=False,
+            )
         
         # (n_envs, state_dim)
         obs, _ = envs.reset()
@@ -181,8 +195,17 @@ class DQNAgent:
 
                 # Q(s_t, a_t)
                 proximate_values = q_network(data.observations).gather(1, data.actions).squeeze()
-                # loss = F.mse_loss(target_values, proximate_values)
-                loss = F.smooth_l1_loss(target_values, proximate_values)
+                
+                if self.buffer_type == "per":
+                    # 计算TD误差
+                    td_errors = torch.abs(target_values - proximate_values)
+                    # 使用IS权重计算加权损失
+                    loss = (td_errors * data.weights).mean()
+                    # 更新优先级
+                    rb.update_priorities(data.indices.detach().cpu().numpy(), td_errors.detach().cpu().numpy())
+                else:
+                    loss = F.mse_loss(target_values, proximate_values)
+                    # loss = F.smooth_l1_loss(target_values, proximate_values)
                 
                 optimizer.zero_grad()
                 loss.backward()
