@@ -4,68 +4,6 @@ from typing import NamedTuple, Dict, Any, Union, Optional
 from dataclasses import dataclass
 from stable_baselines3.common.buffers import ReplayBuffer
 
-class SumTree:
-    """实现高效优先级采样的求和树数据结构"""
-    def __init__(self, capacity):
-        self.capacity = capacity
-        # 树的大小为2*capacity-1，前capacity-1个节点是内部节点，后capacity个节点是叶子节点
-        self.tree = np.zeros(2 * capacity - 1)
-        self.data_pointer = 0
-        
-    def update(self, idx, priority):
-        """更新叶子节点优先级并传播更新"""
-        # 将索引转换为树中的位置
-        tree_idx = idx + self.capacity - 1
-        # 计算变化量
-        change = priority - self.tree[tree_idx]
-        # 更新叶子节点
-        self.tree[tree_idx] = priority
-        
-        # 向上传播变化
-        while tree_idx != 0:
-            tree_idx = (tree_idx - 1) // 2
-            self.tree[tree_idx] += change
-            
-    def add(self, priority):
-        """添加新的优先级到树中"""
-        # 使用数据指针作为叶子节点索引
-        tree_idx = self.data_pointer + self.capacity - 1
-        # 更新优先级
-        self.update(self.data_pointer, priority)
-        # 移动数据指针
-        self.data_pointer = (self.data_pointer + 1) % self.capacity
-        
-        return tree_idx
-    
-    def get(self, v):
-        """获取优先级累积和为v的叶子节点"""
-        parent_idx = 0
-        
-        while True:
-            left_child_idx = 2 * parent_idx + 1
-            right_child_idx = left_child_idx + 1
-            
-            # 如果达到叶子节点，则返回
-            if left_child_idx >= len(self.tree):
-                leaf_idx = parent_idx
-                break
-                
-            # 如果v小于左子树的和，则向左走
-            if v <= self.tree[left_child_idx]:
-                parent_idx = left_child_idx
-            else:
-                # 减去左子树的和，向右走
-                v -= self.tree[left_child_idx]
-                parent_idx = right_child_idx
-        
-        # 将树索引转换回数据索引
-        data_idx = leaf_idx - (self.capacity - 1)
-        return leaf_idx, self.tree[leaf_idx], data_idx
-    
-    def total_priority(self):
-        """返回所有优先级的总和"""
-        return self.tree[0]
-
 class PrioritizedReplayBufferSamples(NamedTuple):
     observations: torch.Tensor
     next_observations: torch.Tensor
@@ -74,7 +12,7 @@ class PrioritizedReplayBufferSamples(NamedTuple):
     dones: torch.Tensor
     weights: torch.Tensor
     indices: torch.Tensor
-    
+
 class PrioritizedExperienceReplayBuffer(ReplayBuffer):
     def __init__(
         self,
@@ -88,7 +26,6 @@ class PrioritizedExperienceReplayBuffer(ReplayBuffer):
         beta_increment: float = 0.0005,
         epsilon: float = 1e-5,
         handle_timeout_termination: bool = True,
-        priority_decay: float = 0.99, # 未被采样的优先级衰减系数
     ):
         super().__init__(
             buffer_size,
@@ -104,14 +41,67 @@ class PrioritizedExperienceReplayBuffer(ReplayBuffer):
         self.beta = beta
         self.beta_increment = beta_increment
         self.epsilon = epsilon
-        self.priority_decay = priority_decay
         
-        # 初始化求和树
-        self.sum_tree = SumTree(self.buffer_size)
+        # 初始化二叉段树用于计算和与最小值
+        self.priority_sum = [0 for _ in range(2 * self.buffer_size)]
+        self.priority_min = [float('inf') for _ in range(2 * self.buffer_size)]
+        
+        # 当前最大优先级
         self.max_priority = 1.0
-        
-        # 存储真实叶子节点索引和缓冲区索引的映射
-        self.indices_mapping = np.zeros(self.buffer_size, dtype=np.int32)
+
+    def _set_priority_min(self, idx, priority_alpha):
+        """更新二叉段树中的最小值"""
+        # 叶子节点
+        idx += self.buffer_size
+        self.priority_min[idx] = priority_alpha
+
+        # 沿祖先节点更新树，直到树的根
+        while idx >= 2:
+            # 获取父节点索引
+            idx //= 2
+            # 父节点的值是其两个子节点的最小值
+            self.priority_min[idx] = min(self.priority_min[2 * idx], self.priority_min[2 * idx + 1])
+
+    def _set_priority_sum(self, idx, priority):
+        """更新二叉段树中的和"""
+        # 叶子节点
+        idx += self.buffer_size
+        # 设置叶子节点的优先级
+        self.priority_sum[idx] = priority
+
+        # 沿祖先节点更新树，直到树的根
+        while idx >= 2:
+            # 获取父节点索引
+            idx //= 2
+            # 父节点的值是其两个子节点的和
+            self.priority_sum[idx] = self.priority_sum[2 * idx] + self.priority_sum[2 * idx + 1]
+
+    def _sum(self):
+        """计算所有优先级的总和"""
+        # 根节点保存所有值的和
+        return self.priority_sum[1]
+
+    def _min(self):
+        """获取最小优先级"""
+        # 根节点保存所有值的最小值
+        return self.priority_min[1]
+
+    def find_prefix_sum_idx(self, prefix_sum):
+        """查找最大的i，使得前i个优先级之和 <= prefix_sum"""
+        # 从根节点开始
+        idx = 1
+        while idx < self.buffer_size:
+            # 如果左子树的和大于所需的和
+            if self.priority_sum[idx * 2] > prefix_sum:
+                # 进入左子树
+                idx = 2 * idx
+            else:
+                # 否则进入右子树并减去左子树的和
+                prefix_sum -= self.priority_sum[idx * 2]
+                idx = 2 * idx + 1
+
+        # 我们现在在叶子节点，减去buffer_size得到实际索引
+        return idx - self.buffer_size
 
     def add(
         self,
@@ -122,72 +112,51 @@ class PrioritizedExperienceReplayBuffer(ReplayBuffer):
         done,
         infos: Dict[str, Any],
     ) -> None:
+        # 获取当前位置
+        idx = self.pos
+        
         # 调用父类的add方法添加经验
         super().add(obs, next_obs, action, reward, done, infos)
         
         # 新样本使用最大优先级
-        tree_idx = self.sum_tree.add(self.max_priority)
-        # 更新索引映射
-        self.indices_mapping[self.pos-1 if self.pos > 0 else self.buffer_size-1] = tree_idx
+        priority_alpha = self.max_priority ** self.alpha
+        self._set_priority_min(idx, priority_alpha)
+        self._set_priority_sum(idx, priority_alpha)
 
     def sample(self, batch_size: int):
         """基于优先级采样经验"""
-        # 如果缓冲区还没填满，只采样已有的数据
+        # 可用样本数
         available_samples = self.pos if not self.full else self.buffer_size
         
-        # 分段采样
-        segment_size = self.sum_tree.total_priority() / batch_size
-        
-        # 用于存储采样结果
-        tree_indices = np.zeros(batch_size, dtype=np.int32)
+        # 初始化样本
         buffer_indices = np.zeros(batch_size, dtype=np.int32)
-        priorities = np.zeros(batch_size, dtype=np.float32)
+        weights = np.zeros(batch_size, dtype=np.float32)
         
-        # 分段采样
+        # 获取总优先级
+        total_priority = self._sum()
+        
+        # 计算最小概率
+        prob_min = self._min() / total_priority
+        # 计算最大权重
+        max_weight = (prob_min * available_samples) ** (-self.beta)
+        
+        # 获取样本索引
         for i in range(batch_size):
-            # 计算当前段的范围
-            a = segment_size * i
-            b = segment_size * (i + 1)
+            # 随机选择一个优先级前缀和
+            p = np.random.random() * total_priority
+            # 找到对应的索引
+            idx = self.find_prefix_sum_idx(p)
+            buffer_indices[i] = idx
             
-            # 在段内随机采样
-            v = np.random.uniform(a, b)
-            
-            # 从求和树获取样本
-            tree_idx, priority, data_idx = self.sum_tree.get(v)
-            
-            # 存储结果
-            tree_indices[i] = tree_idx
-            buffer_indices[i] = data_idx
-            priorities[i] = priority
+            # 计算概率
+            prob = self.priority_sum[idx + self.buffer_size] / total_priority
+            # 计算权重
+            weight = (prob * available_samples) ** (-self.beta)
+            # 归一化权重
+            weights[i] = weight / max_weight
         
-        # 计算重要性采样权重
-        # P(j)为采样概率，样本权重为 (1/N * 1/P(j))^β = (N*P(j))^(-β)
-        sampling_probabilities = priorities / self.sum_tree.total_priority()
-        weights = (available_samples * sampling_probabilities) ** (-self.beta)
-        weights = weights / weights.max()  # 归一化权重
-        
-        # 更新beta参数 - 使用非线性增长
-        self.beta = min(1.0, self.beta + (1.0 - self.beta) * self.beta_increment)
-        
-        # 衰减未被采样的优先级
-        if self.priority_decay < 1.0 and self.full:
-            # 创建衰减掩码
-            decay_mask = np.ones(self.buffer_size, dtype=bool)
-            decay_mask[buffer_indices] = False
-            
-            # 获取需要衰减的索引
-            decay_indices = np.arange(self.buffer_size)[decay_mask]
-            
-            # 获取对应的树索引
-            decay_tree_indices = self.indices_mapping[decay_indices]
-            
-            # 对每个树索引进行优先级衰减
-            for idx in decay_tree_indices:
-                original_idx = idx - (self.buffer_size - 1)
-                if 0 <= original_idx < self.buffer_size:  # 确保索引有效
-                    current_priority = self.sum_tree.tree[idx]
-                    new_priority = current_priority * self.priority_decay
-                    self.sum_tree.update(original_idx, new_priority)
+        # 增加beta值
+        self.beta = min(1.0, self.beta + self.beta_increment)
         
         # 获取经验数据
         data = super()._get_samples(buffer_indices)
@@ -211,20 +180,16 @@ class PrioritizedExperienceReplayBuffer(ReplayBuffer):
         if np.any(indices >= self.buffer_size):
             raise IndexError("索引超出缓冲区范围")
         
-        # 计算优先级，只添加epsilon，不应用alpha
-        raw_priorities = np.abs(priorities) + self.epsilon
-        
-        # 应用alpha指数转换优先级
-        transformed_priorities = raw_priorities ** self.alpha
-        
-        # 更新求和树中的优先级
-        for idx, priority in zip(indices, transformed_priorities):
-            # 获取对应的树索引
-            tree_idx = self.indices_mapping[idx]
-            # 将缓冲区索引转换为叶子节点索引
-            leaf_idx = idx if tree_idx == 0 else idx % self.buffer_size
-            # 更新优先级
-            self.sum_tree.update(leaf_idx, priority)
-        
-        # 更新最大优先级
-        self.max_priority = min(100.0, max(self.max_priority, raw_priorities.max() ** self.alpha))
+        for idx, priority in zip(indices, priorities):
+            # 添加epsilon确保非零优先级
+            priority = max(self.epsilon, priority)
+            
+            # 更新最大优先级
+            self.max_priority = max(self.max_priority, priority)
+            
+            # 计算优先级的alpha次方
+            priority_alpha = priority ** self.alpha
+            
+            # 更新树
+            self._set_priority_min(idx, priority_alpha)
+            self._set_priority_sum(idx, priority_alpha)

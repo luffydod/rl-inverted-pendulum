@@ -21,11 +21,11 @@ class QNetwork(nn.Module):
     def __init__(self, envs):
         super().__init__()
         self.network = nn.Sequential(
-            nn.Linear(np.array(envs.single_observation_space.shape).prod(), 256),
+            nn.Linear(np.array(envs.single_observation_space.shape).prod(), 128),
             nn.ReLU(),
-            nn.Linear(256, 256),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(256, envs.single_action_space.n),
+            nn.Linear(128, envs.single_action_space.n),
         )
 
     def forward(self, x):
@@ -67,7 +67,7 @@ class DQNAgent:
     def __init__(self, 
                  project_name: str = None,
                  algorithm: str = "dqn",
-                 buffer_type: str = "per"):
+                 buffer_type: str = "replay"):
         self.project_name = project_name if project_name else conf.env_id
         self.algorithm = algorithm
         self.buffer_type = buffer_type
@@ -208,10 +208,11 @@ class DQNAgent:
                 proximate_values = q_network(data.observations).gather(1, data.actions).squeeze()
                 
                 if self.buffer_type == "per":
-                    # 计算TD误差
-                    td_errors = torch.abs(target_values - proximate_values)
+                    with torch.no_grad():
+                        value_diff = target_values - proximate_values
+                        td_errors = value_diff ** 2 + 1e-6
                     # 使用IS权重计算加权损失
-                    loss = (td_errors * data.weights).mean()
+                    loss = (F.mse_loss(target_values, proximate_values, reduction='none') * data.weights).mean()
                     # 更新优先级
                     rb.update_priorities(data.indices.detach().cpu().numpy(), td_errors.detach().cpu().numpy())
                 else:
@@ -285,38 +286,36 @@ class DQNAgent:
                 break
     
     def eval(self, global_step, env, model):
-        if global_step % conf.eval_frequency == 0:
-            obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
-            done = False
-            frames = []
-            cumulative_reward = 0
-            
-            while not done:
-                # action = render_env.action_space.sample()
-                with torch.no_grad():
-                    q_values = model(torch.FloatTensor(obs).to(conf.device))
-                    action = torch.argmax(q_values, dim=1).cpu().numpy()
-                
-                # execute action and record frame
-                obs, reward, terminated, truncated, _ = env.step(action)
-                
-                done = terminated
-                cumulative_reward += reward
-                frame = env.render()[0]
-                # (H, W, C) -> (C, H, W)
-                frames.append(frame.transpose(2, 0, 1))
-            
-            video_frames = np.array(frames)
-            wandb.log({
-                "eval/episodic_return": cumulative_reward,
-                "eval/video": wandb.Video(
-                    video_frames, 
-                    fps=30, 
-                    format="gif"
-                ),
-            }, step=global_step)
-            
-            return float(cumulative_reward)
-        
-        else:
+        if global_step % conf.eval_frequency != 0:
             return None
+        obs, _ = env.reset(options={"alpha": np.pi, "alpha_dot": 0})
+        done = False
+        frames = []
+        cumulative_reward = 0
+        
+        while not done:
+            # action = render_env.action_space.sample()
+            with torch.no_grad():
+                q_values = model(torch.FloatTensor(obs).to(conf.device))
+                action = torch.argmax(q_values, dim=1).cpu().numpy()
+            
+            # execute action and record frame
+            obs, reward, terminated, truncated, _ = env.step(action)
+            
+            done = terminated
+            cumulative_reward += reward
+            frame = env.render()[0]
+            # (H, W, C) -> (C, H, W)
+            frames.append(frame.transpose(2, 0, 1))
+        
+        video_frames = np.array(frames)
+        wandb.log({
+            "eval/episodic_return": cumulative_reward,
+            "eval/video": wandb.Video(
+                video_frames, 
+                fps=30, 
+                format="gif"
+            ),
+        }, step=global_step)
+        
+        return float(cumulative_reward)
