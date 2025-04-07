@@ -84,7 +84,7 @@ class DQNAgent:
             q_network = DuelingQNetwork(envs).to(conf.device)
         else:
             q_network = QNetwork(envs).to(conf.device)
-        q_network.load_state_dict(torch.load(model_path))
+        q_network.load_state_dict(torch.load(model_path, map_location=conf.device))
         return q_network
     
     def train(self):
