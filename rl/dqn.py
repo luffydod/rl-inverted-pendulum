@@ -1,6 +1,7 @@
 import time
 import sys
 import os
+import math
 import numpy as np
 import random
 import torch
@@ -20,11 +21,11 @@ class QNetwork(nn.Module):
     def __init__(self, envs):
         super().__init__()
         self.network = nn.Sequential(
-            nn.Linear(np.array(envs.single_observation_space.shape).prod(), 128),
-            nn.LeakyReLU(),
-            nn.Linear(128, 64),
-            nn.LeakyReLU(),
-            nn.Linear(64, envs.single_action_space.n),
+            nn.Linear(np.array(envs.single_observation_space.shape).prod(), 256),
+            nn.ReLU(),
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Linear(256, envs.single_action_space.n),
         )
 
     def forward(self, x):
@@ -35,17 +36,17 @@ class DuelingQNetwork(nn.Module):
         super().__init__()
         self.embedding_network = nn.Sequential(
             nn.Linear(np.array(envs.single_observation_space.shape).prod(), 128),
-            nn.LeakyReLU()
+            nn.ReLU()
         )
         self.v_network = nn.Sequential(
-            nn.Linear(128, 64),
-            nn.LeakyReLU(),
-            nn.Linear(64, 1)
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1)
         )
         self.a_network = nn.Sequential(
-            nn.Linear(128, 64),
-            nn.LeakyReLU(),
-            nn.Linear(64, envs.single_action_space.n)
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, envs.single_action_space.n)
         )
     
     def forward(self, x):
@@ -57,6 +58,10 @@ class DuelingQNetwork(nn.Module):
 def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
     slope = (end_e - start_e) / duration
     return max(slope * t + start_e, end_e)
+
+def exponential_schedule(start_e: float, end_e: float, duration: int, t: int):
+    lambda_ = math.log(start_e / end_e) / duration
+    return max(end_e, end_e + (start_e - end_e) * math.exp(-lambda_ * t))
 
 class DQNAgent:
     def __init__(self, 
@@ -132,7 +137,13 @@ class DQNAgent:
         
         for global_step in range(conf.total_timesteps):
             # calculate epsilon
-            epsilon = linear_schedule(
+            # epsilon = linear_schedule(
+            #     start_e=conf.start_epsilon,
+            #     end_e=conf.end_epsilon,
+            #     duration=conf.exploration_fraction * conf.total_timesteps,
+            #     t=global_step
+            # )
+            epsilon = exponential_schedule(
                 start_e=conf.start_epsilon,
                 end_e=conf.end_epsilon,
                 duration=conf.exploration_fraction * conf.total_timesteps,

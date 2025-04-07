@@ -6,19 +6,19 @@ class DQNConfig:
     """choice from ['inverted-pendulum', 'curling']"""
     n_envs: int = 2
     total_timesteps: int = 500000
-    learning_rate: float = 3e-4
-    buffer_size: int = 50000
-    batch_size: int = 128
+    learning_rate: float = 1e-4
+    buffer_size: int = 100000
+    batch_size: int = 256
     gamma: float = 0.98
-    target_network_frequency: int = 500
-    tau: float = 0.4
-    learning_starts: int = 5000
+    target_network_frequency: int = 1000
+    tau: float = 0.005
+    learning_starts: int = 10000
     max_grad_norm: float = 10
     train_frequency: int = 4
     eval_frequency: int = 10000
     start_epsilon: float = 1.0
-    end_epsilon: float = 0.01
-    exploration_fraction: float = 0.2
+    end_epsilon: float = 0.05
+    exploration_fraction: float = 0.3
     device: str = "cuda:0"
     
     def get_params_dict(self):
