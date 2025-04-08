@@ -20,7 +20,8 @@ class DQNConfig:
     end_epsilon: float = 0.05
     exploration_fraction: float = 0.2
     device: str = "cuda:0"
-    buffer_type: str = "per"
+    buffer_type: str = "uniform"
+    """choice from ['rank-per', 'prop-per', 'uniform']"""
     
     def get_params_dict(self):
         return asdict(self)

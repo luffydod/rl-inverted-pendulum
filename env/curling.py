@@ -157,11 +157,20 @@ class CurlingEnv(gym.Env):
         return -dist
     
     def collision_detection(self):
-        if self.curling_pos[0] < self.radius or self.curling_pos[0] > 100 - self.radius:
-            self.v[0] *= -self.e
-        if self.curling_pos[1] < self.radius or self.curling_pos[1] > 100 - self.radius:
-            self.v[1] *= -self.e
-        self.curling_pos.clip(self.radius, 100 - self.radius)
+        # 检查x方向碰撞
+        if self.curling_pos[0] < self.radius:
+            self.curling_pos[0] = self.radius
+            self.v[0] = -self.e * self.v[0]  # 反射
+        elif self.curling_pos[0] > 100 - self.radius:
+            self.curling_pos[0] = 100 - self.radius
+            self.v[0] = -self.e * self.v[0]  # 反射
+        # 检查y方向碰撞
+        if self.curling_pos[1] < self.radius:
+            self.curling_pos[1] = self.radius
+            self.v[1] = -self.e * self.v[1]  # 反射
+        elif self.curling_pos[1] > 100 - self.radius:
+            self.curling_pos[1] = 100 - self.radius
+            self.v[1] = -self.e * self.v[1]  # 反射
         
     def render(self):
         if self.screen is None:
@@ -177,11 +186,21 @@ class CurlingEnv(gym.Env):
             self.clock = pygame.time.Clock()
 
         # 清空屏幕
-        self.screen.fill((255, 255, 255))
+        self.screen.fill((240, 248, 255))  # 使用淡蓝色背景，模拟冰面
         
         # 坐标转换系数 (游戏世界坐标到屏幕坐标)
         scale = self.screen_dim * 0.92 / 100
         offset = (self.screen_dim - 100 * scale) // 2  # 计算居中偏移量
+        
+        # 绘制冰面纹理
+        for i in range(0, 100, 10):
+            for j in range(0, 100, 10):
+                pygame.draw.rect(
+                    self.screen,
+                    (230, 240, 255),  # 淡蓝色纹理
+                    (offset + i * scale, offset + j * scale, 10 * scale, 10 * scale),
+                    1
+                )
         
         # 绘制边框
         pygame.draw.rect(
@@ -191,10 +210,23 @@ class CurlingEnv(gym.Env):
             5
         )
         
-        # 绘制历史轨迹点
-        for pos in self.curling_pos_history[:-1]:
-            screen_pos = (int(pos[0] * scale) + offset, int(pos[1] * scale) + offset)
-            pygame.draw.circle(self.screen, (200, 200, 200), screen_pos, 2)
+        # 绘制历史轨迹线
+        if len(self.curling_pos_history) > 1:
+            points = []
+            for i, pos in enumerate(self.curling_pos_history[:-1]):
+                screen_pos = (int(pos[0] * scale) + offset, int(pos[1] * scale) + offset)
+                points.append((screen_pos, (200, 200, 200)))
+            
+            # 绘制轨迹线
+            if len(points) > 1:
+                for i in range(len(points) - 1):
+                    pygame.draw.line(
+                        self.screen,
+                        points[i][1],
+                        points[i][0],
+                        points[i+1][0],
+                        2
+                    )
         
         # 绘制目标点
         goal_screen_pos = (int(self.goal_pos[0] * scale) + offset, int(self.goal_pos[1] * scale) + offset)
@@ -205,7 +237,6 @@ class CurlingEnv(gym.Env):
         current_screen_pos = (int(current_pos[0] * scale) + offset, int(current_pos[1] * scale) + offset)
         pygame.draw.circle(self.screen, (0, 0, 255), current_screen_pos, 8)
         
-        # 在冰壶位置绘制力和速度方向箭头
         # 绘制力的方向箭头（绿色）
         arrow_length = 20  # 箭头长度
         if hasattr(self, 'last_action'):
@@ -220,26 +251,9 @@ class CurlingEnv(gym.Env):
             
             # 绘制力的方向线
             pygame.draw.line(self.screen, (0, 255, 0), current_screen_pos, end_pos, 2)
-            # 绘制箭头头部
-            arrow_head_length = 8
-            if self.last_action in [0, 1]:  # 水平方向
-                pygame.draw.line(self.screen, (0, 255, 0), 
-                    end_pos, 
-                    (end_pos[0] - arrow_head_length * (1 if self.last_action == 0 else -1), 
-                        end_pos[1] - arrow_head_length), 2)
-                pygame.draw.line(self.screen, (0, 255, 0), 
-                    end_pos, 
-                    (end_pos[0] - arrow_head_length * (1 if self.last_action == 0 else -1), 
-                        end_pos[1] + arrow_head_length), 2)
-            else:  # 垂直方向
-                pygame.draw.line(self.screen, (0, 255, 0), 
-                    end_pos, 
-                    (end_pos[0] - arrow_head_length, 
-                        end_pos[1] - arrow_head_length * (1 if self.last_action == 2 else -1)), 2)
-                pygame.draw.line(self.screen, (0, 255, 0), 
-                    end_pos, 
-                    (end_pos[0] + arrow_head_length, 
-                        end_pos[1] - arrow_head_length * (1 if self.last_action == 2 else -1)), 2)
+            
+            # 绘制更美观的箭头
+            draw_arrow(self.screen, current_screen_pos, end_pos, (0, 255, 0), 8)
         
         # 绘制速度方向箭头（黄色）
         v_magnitude = np.linalg.norm(self.v)
@@ -254,20 +268,20 @@ class CurlingEnv(gym.Env):
             # 绘制速度方向线
             pygame.draw.line(self.screen, (255, 255, 0), current_screen_pos, end_pos, 2)
             
-            # 绘制箭头头部
-            arrow_head_length = 8
-            angle = np.arctan2(v_normalized[1], v_normalized[0])
-            pygame.draw.line(self.screen, (255, 255, 0),
-                end_pos,
-                (end_pos[0] - arrow_head_length * np.cos(angle + np.pi/6),
-                    end_pos[1] - arrow_head_length * np.sin(angle + np.pi/6)), 2)
-            pygame.draw.line(self.screen, (255, 255, 0),
-                end_pos,
-                (end_pos[0] - arrow_head_length * np.cos(angle - np.pi/6),
-                    end_pos[1] - arrow_head_length * np.sin(angle - np.pi/6)), 2)
-
-        # 翻转坐标系（pygame的坐标系原点在左上角，我们需要将其转换为左下角）
-        self.screen.blit(pygame.transform.flip(self.screen, False, True), (0, 0))
+            # 绘制更美观的箭头
+            draw_arrow(self.screen, current_screen_pos, end_pos, (255, 255, 0), 8)
+        
+        # 添加信息显示
+        font = pygame.font.SysFont('Times New Roman', 18)
+        dist = np.linalg.norm(self.curling_pos - self.goal_pos)
+        dist_text = font.render(f"distance: {dist:.2f}", True, (0, 0, 0))
+        self.screen.blit(dist_text, (28, 24))
+        
+        speed_text = font.render(f"speed: {v_magnitude:.2f}", True, (0, 0, 0))
+        self.screen.blit(speed_text, (28, 44))
+        
+        steps_text = font.render(f"steps: {self.steps}", True, (0, 0, 0))
+        self.screen.blit(steps_text, (28, 64))
         
         if self.render_mode == "human":
             pygame.event.pump()
@@ -283,3 +297,27 @@ class CurlingEnv(gym.Env):
             pygame.display.quit()
             pygame.quit()
             self.isopen = False
+
+# 辅助函数：绘制美观的箭头
+def draw_arrow(surface, start, end, color, arrow_size):
+    # 计算箭头方向
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    angle = np.arctan2(dy, dx)
+    
+    # 绘制箭头主体
+    pygame.draw.line(surface, color, start, end, 2)
+    
+    # 绘制箭头头部
+    arrow_angle = np.pi / 6  # 30度
+    arrow_length = arrow_size
+    
+    # 计算箭头两个端点
+    arrow_x1 = end[0] - arrow_length * np.cos(angle + arrow_angle)
+    arrow_y1 = end[1] - arrow_length * np.sin(angle + arrow_angle)
+    arrow_x2 = end[0] - arrow_length * np.cos(angle - arrow_angle)
+    arrow_y2 = end[1] - arrow_length * np.sin(angle - arrow_angle)
+    
+    # 绘制箭头
+    pygame.draw.line(surface, color, end, (arrow_x1, arrow_y1), 2)
+    pygame.draw.line(surface, color, end, (arrow_x2, arrow_y2), 2)

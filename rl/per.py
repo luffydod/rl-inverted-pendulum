@@ -2,7 +2,6 @@ import numpy as np
 import torch
 import math
 from typing import NamedTuple, Dict, Any, Union, Optional
-from dataclasses import dataclass
 from stable_baselines3.common.buffers import ReplayBuffer
 
 class PrioritizedReplayBufferSamples(NamedTuple):
@@ -75,8 +74,8 @@ class SumTree:
         """返回已填充的大小"""
         return self.size
 
-class PrioritizedExperienceReplayBuffer1(ReplayBuffer):
-    """优先经验回放缓冲区"""
+class PropPrioritizedExperienceReplayBuffer(ReplayBuffer):
+    """基于比例的优先经验回放缓冲区"""
     def __init__(
         self,
         buffer_size: int,
@@ -200,18 +199,6 @@ class PrioritizedExperienceReplayBuffer1(ReplayBuffer):
 
     def update_priorities(self, indices: np.ndarray, priorities: np.ndarray) -> None:
         """更新样本优先级"""
-        # 转换为numpy数组
-        if torch.is_tensor(indices):
-            indices = indices.cpu().numpy()
-        if torch.is_tensor(priorities):
-            priorities = priorities.cpu().numpy()
-            
-        # 确保索引在有效范围内
-        valid_mask = (indices >= 0) & (indices < self.buffer_size)
-        if not np.all(valid_mask):
-            indices = indices[valid_mask]
-            priorities = priorities[valid_mask]
-        
         if len(indices) == 0:
             return
         
@@ -228,7 +215,7 @@ class PrioritizedExperienceReplayBuffer1(ReplayBuffer):
             # 更新树
             self.sum_tree.val_update(idx, priority_alpha)
 
-class PrioritizedExperienceReplayBuffer(ReplayBuffer):
+class RankPrioritizedExperienceReplayBuffer(ReplayBuffer):
     """基于排名的优先经验回放缓冲区
     
     与基于TD误差的方法相比，基于排名的方法对异常值更加鲁棒，
@@ -273,7 +260,7 @@ class PrioritizedExperienceReplayBuffer(ReplayBuffer):
         self.sum_priorities = 0.0
         
         # 设置初始优先级为较大值，确保新样本被采样
-        self.max_priority = 100.0
+        self.max_priority = 1.0
         
     def _compute_rank_based_priorities(self):
         """计算基于排名的优先级"""
@@ -286,15 +273,11 @@ class PrioritizedExperienceReplayBuffer(ReplayBuffer):
         # 获取优先级数组的前filled_size个元素
         priorities_subset = self.priorities[:filled_size]
         
-        # 对优先级进行排序，获取排名（降序排名，即最大的优先级排名为0）
-        # 使用argsort的argsort获取排名（numpy技巧）
+        # 对优先级进行排序，获取排名（降序排名，即最大的优先级排名为0
         ranks = np.argsort(np.argsort(-priorities_subset))
         
         # 基于排名计算优先级（幂律分布）
-        # rank + 1是为了避免0排名导致无穷大优先级
         self.rank_based_priorities[:filled_size] = 1.0 / (ranks + 1) ** self.alpha
-        
-        # 重置未填充部分的优先级
         if filled_size < self.buffer_size:
             self.rank_based_priorities[filled_size:] = 0.0
             
@@ -330,7 +313,6 @@ class PrioritizedExperienceReplayBuffer(ReplayBuffer):
         """更新beta值，用于重要性采样权重计算"""
         if self.beta_annealing_steps is None:
             return
-            
         # 线性增加beta值，从beta_start到1.0
         progress = min(1.0, self.sample_count / self.beta_annealing_steps)
         self.beta = self.beta_start + progress * (1.0 - self.beta_start)
@@ -344,39 +326,28 @@ class PrioritizedExperienceReplayBuffer(ReplayBuffer):
         # 可用样本数
         available_samples = min(self.pos, self.buffer_size) if not self.full else self.buffer_size
         
-        if available_samples == 0:
-            raise ValueError("没有可用的样本进行采样")
-        
-        # 初始化样本索引和权重数组
         buffer_indices = np.zeros(batch_size, dtype=np.int32)
         weights = np.zeros(batch_size, dtype=np.float32)
         
-        # 更新beta值（在采样前更新，确保批次内使用相同的beta值）
         self.update_beta()
         
-        # 检查是否所有优先级都为0或优先级总和为0
-        if self.sum_priorities <= 0 or available_samples == 0:
-            # 处理边缘情况：所有优先级为0或没有可用样本，使用均匀采样
-            buffer_indices = np.random.randint(0, available_samples, size=batch_size)
-            weights = np.ones_like(buffer_indices, dtype=np.float32)
-        else:
-            # 计算最小概率对应的最大权重（用于归一化）
-            min_prob = self.rank_based_priorities[:available_samples].min() / self.sum_priorities
-            max_weight = (min_prob * available_samples) ** (-self.beta)
+        min_prob = self.rank_based_priorities[:available_samples].min() / self.sum_priorities
+        max_weight = (min_prob * available_samples) ** (-self.beta)
+        
+        probs = self.rank_based_priorities[:available_samples] / self.sum_priorities
+        for i in range(batch_size):
+            # sample
+            idx = np.random.choice(
+                available_samples, 
+                p=probs
+            )
+            buffer_indices[i] = idx
             
-            # 采样
-            for i in range(batch_size):
-                # 按概率采样（使用numpy的随机选择函数）
-                idx = np.random.choice(
-                    available_samples, 
-                    p=self.rank_based_priorities[:available_samples] / self.sum_priorities
-                )
-                buffer_indices[i] = idx
-                
-                # 计算IS权重
-                prob = self.rank_based_priorities[idx] / self.sum_priorities
-                weight = (prob * available_samples) ** (-self.beta)
-                weights[i] = weight / max_weight
+            # IS Weight
+            prob = self.rank_based_priorities[idx] / self.sum_priorities
+            # w=(p(i)*N)^(-beta)
+            weight = (prob * available_samples) ** (-self.beta)
+            weights[i] = weight / max_weight
         
         self.sample_count += 1
         
@@ -395,28 +366,12 @@ class PrioritizedExperienceReplayBuffer(ReplayBuffer):
 
     def update_priorities(self, indices: np.ndarray, priorities: np.ndarray) -> None:
         """更新样本优先级"""
-        # 转换为numpy数组
-        if torch.is_tensor(indices):
-            indices = indices.cpu().numpy()
-        if torch.is_tensor(priorities):
-            priorities = priorities.cpu().numpy()
-            
-        # 确保索引在有效范围内
-        valid_mask = (indices >= 0) & (indices < self.buffer_size)
-        if not np.all(valid_mask):
-            indices = indices[valid_mask]
-            priorities = priorities[valid_mask]
         
         if len(indices) == 0:
             return
         
-        # 逐个更新优先级
         for idx, priority in zip(indices, priorities):
-            # 更新原始优先级
             self.priorities[idx] = priority
-            
-            # 更新最大优先级
             self.max_priority = max(self.max_priority, priority)
         
-        # 标记优先级需要更新
         self.priorities_need_update = True

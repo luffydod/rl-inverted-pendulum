@@ -10,29 +10,58 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pygame
 import wandb
+import rich
 from stable_baselines3.common.buffers import ReplayBuffer
-from rl.per import PrioritizedExperienceReplayBuffer
+from rl.per import RankPrioritizedExperienceReplayBuffer, PropPrioritizedExperienceReplayBuffer
 from env import make_envs
 from config import DQNConfig
 
 conf = DQNConfig()
 
+# 添加初始化方法
+def init_weights(module, init_type='he', gain=1.0):
+    """
+    初始化网络权重
+    
+    参数:
+        module: 需要初始化的模块
+        init_type: 初始化类型，可选 'he', 'xavier', 'orthogonal', 'default'
+        gain: 增益因子，用于正交初始化
+    """
+    if isinstance(module, nn.Linear):
+        if init_type == 'he':
+            nn.init.kaiming_normal_(module.weight, nonlinearity='relu')
+        elif init_type == 'xavier':
+            nn.init.xavier_normal_(module.weight)
+        elif init_type == 'orthogonal':
+            nn.init.orthogonal_(module.weight, gain=gain)
+        elif init_type == 'default':
+            # 使用PyTorch默认初始化
+            pass
+        else:
+            raise ValueError(f"不支持的初始化类型: {init_type}")
+        
+        if module.bias is not None:
+            nn.init.constant_(module.bias, 0.0)
+
 class QNetwork(nn.Module):
-    def __init__(self, envs):
+    def __init__(self, envs, init_type='he'):
         super().__init__()
         self.network = nn.Sequential(
-            nn.Linear(np.array(envs.single_observation_space.shape).prod(), 128),
+            nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(64, 64),
             nn.ReLU(),
-            nn.Linear(128, envs.single_action_space.n),
+            nn.Linear(64, envs.single_action_space.n),
         )
+        # 应用权重初始化
+        self.apply(lambda m: init_weights(m, init_type=init_type))
 
     def forward(self, x):
         return self.network(x)
 
 class DuelingQNetwork(nn.Module):
-    def __init__(self, envs):
+    def __init__(self, envs, init_type='he'):
         super().__init__()
         self.embedding_network = nn.Sequential(
             nn.Linear(np.array(envs.single_observation_space.shape).prod(), 128),
@@ -48,6 +77,8 @@ class DuelingQNetwork(nn.Module):
             nn.ReLU(),
             nn.Linear(128, envs.single_action_space.n)
         )
+        # 应用权重初始化
+        self.apply(lambda m: init_weights(m, init_type=init_type))
     
     def forward(self, x):
         embedding = self.embedding_network(x)
@@ -67,23 +98,25 @@ class DQNAgent:
     def __init__(self, 
                  project_name: str = None,
                  algorithm: str = "dqn",
-                 buffer_type: str = None):
+                 buffer_type: str = None,
+                 init_type: str = "he"):
         self.project_name = project_name if project_name else conf.env_id
         self.algorithm = algorithm
         self.buffer_type = buffer_type if buffer_type else conf.buffer_type
+        self.init_type = init_type
     
     def create_model(self, envs):
         if self.algorithm == "dueling":
-            q_network = DuelingQNetwork(envs).to(conf.device)
+            q_network = DuelingQNetwork(envs, init_type=self.init_type).to(conf.device)
         else:
-            q_network = QNetwork(envs).to(conf.device)
+            q_network = QNetwork(envs, init_type=self.init_type).to(conf.device)
         return q_network
     
     def load_model(self, model_path: str, envs):
         if self.algorithm == "dueling":
-            q_network = DuelingQNetwork(envs).to(conf.device)
+            q_network = DuelingQNetwork(envs, init_type=self.init_type).to(conf.device)
         else:
-            q_network = QNetwork(envs).to(conf.device)
+            q_network = QNetwork(envs, init_type=self.init_type).to(conf.device)
         q_network.load_state_dict(torch.load(model_path, map_location=conf.device))
         return q_network
     
@@ -92,7 +125,9 @@ class DQNAgent:
         run = wandb.init(
             project=f"{self.project_name}-{self.algorithm}",
             config=conf.get_params_dict(),
-            monitor_gym=True
+            monitor_gym=True,
+            settings=wandb.Settings(_disable_stats=True,
+                                    _disable_meta=True),
         )
         
         best_reward = -float('inf')
@@ -111,9 +146,20 @@ class DQNAgent:
         # optimizer
         optimizer = optim.Adam(q_network.parameters(), lr=conf.learning_rate)
         
-        if self.buffer_type == "per":
+        if self.buffer_type == "rank-per":
             # prioritized experience replay buffer
-            rb = PrioritizedExperienceReplayBuffer(
+            rb = RankPrioritizedExperienceReplayBuffer(
+                conf.buffer_size,
+                envs.single_observation_space,
+                envs.single_action_space,
+                conf.device,
+                n_envs=envs.num_envs,
+                beta_annealing_steps=conf.total_timesteps,
+                handle_timeout_termination=False,
+            )
+        elif self.buffer_type == "prop-per":
+            # prioritized experience replay buffer
+            rb = PropPrioritizedExperienceReplayBuffer(
                 conf.buffer_size,
                 envs.single_observation_space,
                 envs.single_action_space,
@@ -136,7 +182,7 @@ class DQNAgent:
         # (n_envs, state_dim)
         obs, _ = envs.reset()
         
-        for global_step in range(conf.total_timesteps):
+        for global_step in rich.progress.track(range(conf.total_timesteps), description="Training..."):
             # calculate epsilon
             # epsilon = linear_schedule(
             #     start_e=conf.start_epsilon,
@@ -161,20 +207,12 @@ class DQNAgent:
             
             # 执行动作
             next_obs, rewards, terminations, truncations, infos = envs.step(actions)
-
-            wandb.log({
-                "training/avg_reward": rewards.mean(),
-                "training/state_alpha": obs[:, 0].mean(),      # 角度均值
-                "training/state_alpha_dot": obs[:, 1].mean(),  # 角速度均值
-                "training/state_alpha_std": obs[:, 0].std(),   # 角度标准差
-                "training/state_alpha_dot_std": obs[:, 1].std() # 角速度标准差
-            }, step=global_step)
             
             if "episode" in infos:
                 episode_length = infos["episode"]["l"].mean()
                 episode_return = infos["episode"]["r"].mean()
                 episode_time = infos["episode"]["t"].mean()
-                print(f"global_step={global_step}, episodic_return={episode_return}, episodic_length={episode_length}, episodic_time={episode_time}")
+                print(f"global_step={global_step}, episodic_return={episode_return:.2f}")
                 # record episode information to wandb
                 wandb.log({
                     "charts/episodic_return": episode_return,
@@ -208,16 +246,19 @@ class DQNAgent:
                 # Q(s_t, a_t)
                 proximate_values = q_network(data.observations).gather(1, data.actions).squeeze()
                 
-                if self.buffer_type == "per":
+                if self.buffer_type == "uniform":
+                    loss = F.mse_loss(target_values, proximate_values)
+                    # loss = F.smooth_l1_loss(target_values, proximate_values)
+                # PER
+                else:
                     with torch.no_grad():
                         td_errors = torch.abs(target_values - proximate_values) + 1e-6
+                        # clip td_errors
+                        td_errors = torch.clamp(td_errors, min=0, max=100)
                     # 使用IS权重计算加权损失
                     loss = (F.mse_loss(target_values, proximate_values, reduction='none') * data.weights).mean()
                     # 更新优先级
                     rb.update_priorities(data.indices.detach().cpu().numpy(), td_errors.detach().cpu().numpy())
-                else:
-                    loss = F.mse_loss(target_values, proximate_values)
-                    # loss = F.smooth_l1_loss(target_values, proximate_values)
                 
                 optimizer.zero_grad()
                 loss.backward()
@@ -226,13 +267,12 @@ class DQNAgent:
                 optimizer.step()
                 
                 # 记录损失
-                if global_step % 100 == 0:
+                if global_step % 200 == 0:
                     log_data = {
-                        "losses/td_errors": td_errors.mean().item(),
                         "losses/td_loss": loss.item(),
                         "losses/q_values": proximate_values.mean().item()
                     }
-                    if self.buffer_type == "per":
+                    if self.buffer_type == "rank-per" or self.buffer_type == "prop-per":
                         log_data.update({
                             "per/beta": rb.beta,
                             "per/mean_weight": data.weights.mean().item(),
