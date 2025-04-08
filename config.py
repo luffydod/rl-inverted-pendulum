@@ -46,7 +46,7 @@ class PPOConfig:
     target_kl: float = 0.03
     normalize_advantage: bool = True
     device: str = "cuda:0"
-    eval_frequency: int = 10000
+    eval_frequency: int = 10
     log_interval: int = 1
     reset_num_timesteps: bool = True
     

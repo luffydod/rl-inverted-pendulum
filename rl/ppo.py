@@ -13,6 +13,7 @@ import os
 import rich.progress
 from env import make_envs
 from config import PPOConfig
+
 conf = PPOConfig()
 
 class Actor(nn.Module):
@@ -25,7 +26,6 @@ class Actor(nn.Module):
             nn.Tanh(),
             nn.Linear(128, envs.single_action_space.n),
         )
-        # 应用权重初始化
         self.apply(lambda m: init_weights(m, init_type=init_type))
 
     def forward(self, x):
@@ -41,13 +41,11 @@ class Critic(nn.Module):
             nn.Tanh(),
             nn.Linear(128, 1),
         )
-        # 应用权重初始化
         self.apply(lambda m: init_weights(m, init_type=init_type))
         
     def forward(self, x):
         return self.network(x)
-
-# 自定义ActorCriticPolicy类，替代stable_baselines3的依赖
+    
 class ActorCriticPolicy(nn.Module):
     """
     自定义的Actor-Critic策略网络
@@ -66,10 +64,6 @@ class ActorCriticPolicy(nn.Module):
         
         # 设置优化器
         self.optimizer = th.optim.Adam(self.parameters(), lr=learning_rate)
-        
-        # 保存环境信息
-        self.observation_space = envs.single_observation_space
-        self.action_space = envs.single_action_space
         
         # 训练模式标志
         self._training = True
@@ -144,6 +138,8 @@ class ActorCriticPolicy(nn.Module):
     def set_training_mode(self, training):
         self._training = training
         self.train(training)
+        self.actor.train(training)
+        self.critic.train(training)
     
 class PPOAgent:
     """
@@ -185,10 +181,6 @@ class PPOAgent:
         
         # 设置设备
         self.device = get_device(conf.device)
-        
-    def _setup_model(self) -> None:
-        """设置模型"""
-        self._setup_lr_schedule()
         
     def _setup_lr_schedule(self) -> None:
         """设置学习率调度器"""
@@ -235,6 +227,9 @@ class PPOAgent:
             
             self.num_timesteps += self.env.num_envs
                     
+            # 合并done信号
+            dones = np.logical_or(terminations, truncations)
+            
             # 添加到缓冲区
             self.rollout_buffer.add(
                 self._last_obs,
@@ -258,15 +253,23 @@ class PPOAgent:
                     "charts/episodic_time": episode_time,
                 }, step=self.num_timesteps)
             
+            # 更新状态
             self._last_obs = new_obs
-            self._last_episode_starts = terminations
+            self._last_episode_starts = dones  # 使用合并的done信号
             n_steps += 1
             
         with th.no_grad():
-            # 计算最后一步的价值
-            values = self.policy.predict_values(obs_as_tensor(new_obs, self.device))
+            # 计算最后一步的价值，对于终止状态价值为0
+            next_values = self.policy.predict_values(obs_as_tensor(new_obs, self.device))
+            terminations_tensor = th.tensor(terminations, dtype=th.float32, device=self.device)
+            terminations_tensor = terminations_tensor.view(-1, 1)
             
-        self.rollout_buffer.compute_returns_and_advantage(last_values=values, dones=terminations)
+            bootstrap_values = next_values * (1 - terminations_tensor)
+            
+        self.rollout_buffer.compute_returns_and_advantage(
+            last_values=bootstrap_values, 
+            dones=dones
+        )
         
         return True
     
@@ -353,9 +356,9 @@ class PPOAgent:
                     approx_kl_div = th.mean((th.exp(log_ratio) - 1) - log_ratio).cpu().numpy()
                     approx_kl_divs.append(approx_kl_div)
                     
-                if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
+                if self.target_kl is not None and epoch > 0 and np.mean(approx_kl_divs) > self.target_kl:
                     continue_training = False
-                    print(f"在步骤{epoch}处早停，因为达到了最大kl: {approx_kl_div:.2f}")
+                    print(f"在步骤{epoch}处早停，因为平均KL散度 {np.mean(approx_kl_divs):.4f} 超过目标值 {self.target_kl:.4f}")
                     break
                     
                 # 优化步骤
@@ -396,45 +399,7 @@ class PPOAgent:
             "train/n_updates": self._n_updates,
             "train/clip_range": clip_range,
         }, step=self.num_timesteps)
-    
-    def learn(
-        self,
-        total_timesteps: int,
-        log_interval: int = 1,
-        reset_num_timesteps: bool = True,
-    ):
-        """
-        学习指定数量的时间步
-        
-        参数:
-            total_timesteps: 总时间步数
-            log_interval: 日志记录间隔
-            reset_num_timesteps: 是否重置时间步计数
-            
-        返回:
-            self
-        """
-        if reset_num_timesteps:
-            self.num_timesteps = 0
-            
-        iteration = 0
-        
-        while self.num_timesteps < total_timesteps:
-            continue_training = self.collect_rollouts()
-            
-            if not continue_training:
-                break
-                
-            iteration += 1
-            
-            # 显示训练信息
-            if log_interval is not None and iteration % log_interval == 0:
-                print(f"迭代: {iteration}, 时间步: {self.num_timesteps}/{total_timesteps}")
-                
-            self.train_step()
-            
-        return self 
-        
+       
     def train(self, model_path: str = None):
         """
         训练PPO代理
@@ -498,35 +463,45 @@ class PPOAgent:
         obs, _ = envs.reset()
         self._last_obs = obs
         self._last_episode_starts = np.zeros(envs.num_envs, dtype=bool)
-        
-        for global_step in rich.progress.track(range(conf.total_timesteps), description="Training..."):
-            # 收集经验
-            continue_training = self.collect_rollouts()
+        with rich.progress.Progress(
+            rich.progress.TextColumn("[progress.description]{task.description}"),
+            rich.progress.BarColumn(),
+            rich.progress.TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            rich.progress.TimeRemainingColumn(),
+        ) as progress:
+            task = progress.add_task("Training...", total=conf.total_timesteps)
             
-            if not continue_training:
-                break
+            while self.num_timesteps < conf.total_timesteps:
+                # 收集经验
+                continue_training = self.collect_rollouts()
                 
-            iteration += 1
-            
-            # 训练策略
-            self.train_step()
-            
-            # 显示训练信息
-            if conf.log_interval is not None and iteration % conf.log_interval == 0:
-                print(f"迭代: {iteration}, 时间步: {self.num_timesteps}/{conf.total_timesteps}")
-                
-            # 评估模型
-            if iteration % conf.eval_frequency == 0:
-                eval_reward = self.eval(global_step, eval_env)
-                if eval_reward and eval_reward > best_reward:
-                    best_reward = eval_reward
-                    best_model = self.policy.state_dict()
+                if not continue_training:
+                    break
                     
-                # 记录评估结果到wandb
-                wandb.log({
-                    "charts/eval_reward": eval_reward,
-                }, step=global_step)
-        
+                iteration += 1
+                
+                # 训练策略
+                self.train_step()
+                
+                # 显示训练信息
+                if conf.log_interval is not None and iteration % conf.log_interval == 0:
+                    print(f"迭代: {iteration}, 时间步: {self.num_timesteps}/{conf.total_timesteps}")
+                
+                # 更新进度条
+                progress.update(task, completed=min(self.num_timesteps, conf.total_timesteps))
+                
+                # 评估模型
+                if iteration % conf.eval_frequency == 0:
+                    eval_reward = self.eval(self.num_timesteps, eval_env)
+                    if eval_reward and eval_reward > best_reward:
+                        best_reward = eval_reward
+                        best_model = self.policy.state_dict()
+                        
+                    # 记录评估结果到wandb
+                    wandb.log({
+                        "charts/eval_reward": eval_reward,
+                    }, step=self.num_timesteps)
+                    
         # 保存模型
         dir_path = f"models/{self.project_name}/{self.algorithm}"
         os.makedirs(dir_path, exist_ok=True)
