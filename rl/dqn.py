@@ -14,36 +14,9 @@ import rich
 from buffers import ReplayBuffer, PrioritizedReplayBuffer
 from env import make_envs
 from config import DQNConfig
+from utils import init_weights
 
 conf = DQNConfig()
-
-# 添加初始化方法
-def init_weights(module, init_type='he', gain=1.0):
-    """
-    初始化网络权重
-    
-    参数:
-        module: 需要初始化的模块
-        init_type: 初始化类型，可选 'he', 'xavier', 'orthogonal', 'default'
-        gain: 增益因子，用于正交初始化
-    """
-    if isinstance(module, nn.Linear):
-        if init_type == 'he':
-            nn.init.kaiming_normal_(module.weight, nonlinearity='relu')
-        elif init_type == 'xavier':
-            nn.init.xavier_normal_(module.weight)
-        elif init_type == 'orthogonal':
-            nn.init.orthogonal_(module.weight, gain=gain)
-        elif init_type == 'default':
-            # 使用PyTorch默认初始化
-            pass
-        else:
-            raise ValueError(f"不支持的初始化类型: {init_type}")
-        
-        if module.bias is not None:
-            nn.init.constant_(module.bias, 0.0)
-
-
 class QNetwork(nn.Module):
     def __init__(self, envs, init_type='he'):
         super().__init__()

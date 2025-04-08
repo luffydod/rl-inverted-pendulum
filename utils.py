@@ -1,7 +1,14 @@
 import torch as th
-from typing import Dict, Tuple, Union
+from typing import Dict, Tuple, Union, Callable
 import numpy as np
 from gymnasium import spaces
+import torch.nn as nn
+
+# A schedule takes the remaining progress as input
+# and outputs a scalar (e.g. learning rate, clip range, ...)
+Schedule = Callable[[float], float]
+
+TensorDict = Dict[str, th.Tensor]
 
 def get_action_dim(action_space: spaces.Space) -> int:
     """
@@ -74,3 +81,95 @@ def get_device(device: Union[th.device, str] = "auto") -> th.device:
         return th.device("cpu")
 
     return device
+
+def init_weights(module, init_type='he', gain=1.0):
+    """
+    初始化网络权重
+    
+    参数:
+        module: 需要初始化的模块
+        init_type: 初始化类型，可选 'he', 'xavier', 'orthogonal', 'default'
+        gain: 增益因子，用于正交初始化
+    """
+    if isinstance(module, nn.Linear):
+        if init_type == 'he':
+            nn.init.kaiming_normal_(module.weight, nonlinearity='relu')
+        elif init_type == 'xavier':
+            nn.init.xavier_normal_(module.weight)
+        elif init_type == 'orthogonal':
+            nn.init.orthogonal_(module.weight, gain=gain)
+        elif init_type == 'default':
+            # 使用PyTorch默认初始化
+            pass
+        else:
+            raise ValueError(f"不支持的初始化类型: {init_type}")
+        
+        if module.bias is not None:
+            nn.init.constant_(module.bias, 0.0)
+            
+# From stable baselines
+def explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+    """
+    Computes fraction of variance that ypred explains about y.
+    Returns 1 - Var[y-ypred] / Var[y]
+
+    interpretation:
+        ev=0  =>  might as well have predicted zero
+        ev=1  =>  perfect prediction
+        ev<0  =>  worse than just predicting zero
+
+    :param y_pred: the prediction
+    :param y_true: the expected value
+    :return: explained variance of ypred and y
+    """
+    assert y_true.ndim == 1 and y_pred.ndim == 1
+    var_y = np.var(y_true)
+    return np.nan if var_y == 0 else float(1 - np.var(y_true - y_pred) / var_y)
+
+def constant_fn(val: float) -> Schedule:
+    """
+    Create a function that returns a constant
+    It is useful for learning rate schedule (to avoid code duplication)
+
+    :param val: constant value
+    :return: Constant schedule function.
+    """
+
+    def func(_):
+        return val
+
+    return func
+
+def get_schedule_fn(value_schedule: Union[Schedule, float]) -> Schedule:
+    """
+    Transform (if needed) learning rate and clip range (for PPO)
+    to callable.
+
+    :param value_schedule: Constant value of schedule function
+    :return: Schedule function (can return constant value)
+    """
+    # If the passed schedule is a float
+    # create a constant function
+    if isinstance(value_schedule, (float, int)):
+        # Cast to float to avoid errors
+        value_schedule = constant_fn(float(value_schedule))
+    else:
+        assert callable(value_schedule)
+    # Cast to float to avoid unpickling errors to enable weights_only=True, see GH#1900
+    # Some types are have odd behaviors when part of a Schedule, like numpy floats
+    return lambda progress_remaining: float(value_schedule(progress_remaining))
+
+def obs_as_tensor(obs: Union[np.ndarray, Dict[str, np.ndarray]], device: th.device) -> Union[th.Tensor, TensorDict]:
+    """
+    Moves the observation to the given device.
+
+    :param obs:
+    :param device: PyTorch device
+    :return: PyTorch tensor of the observation on a desired device.
+    """
+    if isinstance(obs, np.ndarray):
+        return th.as_tensor(obs, device=device)
+    elif isinstance(obs, dict):
+        return {key: th.as_tensor(_obs, device=device) for (key, _obs) in obs.items()}
+    else:
+        raise Exception(f"Unrecognized type of observation {type(obs)}")

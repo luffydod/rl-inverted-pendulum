@@ -30,7 +30,7 @@ class DQNConfig:
 class PPOConfig:
     env_id: str = "inverted-pendulum"
     """choice from ['inverted-pendulum',]"""
-    n_envs: int = 8
+    n_envs: int = 2
     total_timesteps: int = 500000
     learning_rate: float = 3e-4
     n_steps: int = 2048
@@ -44,10 +44,11 @@ class PPOConfig:
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
     target_kl: float = 0.03
-    update_adv: bool = True
     normalize_advantage: bool = True
     device: str = "cuda:0"
     eval_frequency: int = 10000
+    log_interval: int = 1
+    reset_num_timesteps: bool = True
     
     def get_params_dict(self):
         return asdict(self)
