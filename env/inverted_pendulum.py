@@ -16,7 +16,7 @@ class InvertedPendulumEnv(gym.Env):
     }
     
     def __init__(self, 
-                 max_episode_steps: int = 200,
+                 max_episode_steps: int = 300,
                  render_mode: Optional[str] = 'human',
                  discrete_action: bool = True,
                  discrete_state: bool = False,

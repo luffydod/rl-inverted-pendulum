@@ -67,10 +67,10 @@ class DQNAgent:
     def __init__(self, 
                  project_name: str = None,
                  algorithm: str = "dqn",
-                 buffer_type: str = "replay"):
+                 buffer_type: str = None):
         self.project_name = project_name if project_name else conf.env_id
         self.algorithm = algorithm
-        self.buffer_type = buffer_type
+        self.buffer_type = buffer_type if buffer_type else conf.buffer_type
     
     def create_model(self, envs):
         if self.algorithm == "dueling":
@@ -119,6 +119,7 @@ class DQNAgent:
                 envs.single_action_space,
                 conf.device,
                 n_envs=envs.num_envs,
+                beta_annealing_steps=conf.total_timesteps,
                 handle_timeout_termination=False,
             )
         else:
@@ -209,8 +210,7 @@ class DQNAgent:
                 
                 if self.buffer_type == "per":
                     with torch.no_grad():
-                        value_diff = target_values - proximate_values
-                        td_errors = value_diff ** 2 + 1e-6
+                        td_errors = torch.abs(target_values - proximate_values) + 1e-6
                     # 使用IS权重计算加权损失
                     loss = (F.mse_loss(target_values, proximate_values, reduction='none') * data.weights).mean()
                     # 更新优先级
@@ -227,10 +227,18 @@ class DQNAgent:
                 
                 # 记录损失
                 if global_step % 100 == 0:
-                    wandb.log({
+                    log_data = {
+                        "losses/td_errors": td_errors.mean().item(),
                         "losses/td_loss": loss.item(),
                         "losses/q_values": proximate_values.mean().item()
-                    }, step=global_step)
+                    }
+                    if self.buffer_type == "per":
+                        log_data.update({
+                            "per/beta": rb.beta,
+                            "per/mean_weight": data.weights.mean().item(),
+                            "per/max_priority": rb.max_priority
+                        })
+                    wandb.log(log_data, step=global_step)
             
             # 更新目标网络
             if global_step % conf.target_network_frequency == 0:
