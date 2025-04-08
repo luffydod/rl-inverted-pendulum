@@ -44,15 +44,16 @@ def init_weights(module, init_type='he', gain=1.0):
         if module.bias is not None:
             nn.init.constant_(module.bias, 0.0)
 
+
 class QNetwork(nn.Module):
     def __init__(self, envs, init_type='he'):
         super().__init__()
         self.network = nn.Sequential(
-            nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64),
+            nn.Linear(np.array(envs.single_observation_space.shape).prod(), 128),
             nn.ReLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(64, envs.single_action_space.n),
+            nn.Linear(128, envs.single_action_space.n),
         )
         # 应用权重初始化
         self.apply(lambda m: init_weights(m, init_type=init_type))
@@ -120,7 +121,7 @@ class DQNAgent:
         q_network.load_state_dict(torch.load(model_path, map_location=conf.device))
         return q_network
     
-    def train(self):
+    def train(self, model_path: str = None):
         # wandb init
         run = wandb.init(
             project=f"{self.project_name}-{self.algorithm}",
@@ -134,12 +135,19 @@ class DQNAgent:
         best_model = None
         
         # create envs
-        envs = make_envs(conf.env_id, conf.n_envs)
-
+        if conf.env_id == "inverted-pendulum" and model_path is not None:
+            reset_option = "goal"
+        else:
+            reset_option = None
+            
+        envs = make_envs(conf.env_id, conf.n_envs, reset_option=reset_option)
         eval_env = make_envs(conf.env_id, 1)
         
         # create network
-        q_network = self.create_model(envs)
+        if model_path is None:
+            q_network = self.create_model(envs)
+        else:
+            q_network = self.load_model(model_path, envs)
         target_network = self.create_model(envs)
         target_network.load_state_dict(q_network.state_dict())
         

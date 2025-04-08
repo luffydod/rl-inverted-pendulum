@@ -20,6 +20,7 @@ class InvertedPendulumEnv(gym.Env):
                  render_mode: Optional[str] = 'human',
                  discrete_action: bool = True,
                  discrete_state: bool = False,
+                 reset_option: str = None
                  ):
         super(InvertedPendulumEnv, self).__init__()
         
@@ -38,6 +39,8 @@ class InvertedPendulumEnv(gym.Env):
         self.render_mode = render_mode
         self.discrete_action = discrete_action
         self.discrete_state = discrete_state
+        self.reset_option = reset_option
+        
         if self.discrete_state:
             self.q_table = self._get_tables()
             
@@ -119,14 +122,16 @@ class InvertedPendulumEnv(gym.Env):
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
         self.steps = 0
-        if options is None:
+        if self.reset_option == "goal":
+            alpha = np.pi
+            alpha_dot = 0
+        elif options is None:
             alpha = self.np_random.uniform(*self.state_bounds['alpha'])
             alpha_dot = self.np_random.uniform(*self.state_bounds['alpha_dot'])
-            self.state = np.array([alpha, alpha_dot], dtype=np.float32)
         else:
             alpha = options.get("alpha")
             alpha_dot = options.get("alpha_dot")
-            self.state = np.array([alpha, alpha_dot], dtype=np.float32)
+        self.state = np.array([alpha, alpha_dot], dtype=np.float32)
         if self.render_mode == "human":
             self.render()
         return self._get_obs(), {}

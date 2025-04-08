@@ -20,6 +20,6 @@ if __name__ == "__main__":
         raise ValueError(f"Algorithm {args.algorithm} not supported")
     agent = AgentClass(algorithm=args.algorithm)
     if args.mode == "train":
-        agent.train()
+        agent.train(model_path=args.model_path)
     elif args.mode == "test":
         agent.test(model_path=args.model_path)
