@@ -20,8 +20,34 @@ class DQNConfig:
     end_epsilon: float = 0.05
     exploration_fraction: float = 0.2
     device: str = "cuda:0"
-    buffer_type: str = "uniform"
-    """choice from ['rank-per', 'prop-per', 'uniform']"""
+    buffer_type: str = "per"
+    """choice from ['per', 'uniform']"""
+    
+    def get_params_dict(self):
+        return asdict(self)
+
+@dataclass
+class PPOConfig:
+    env_id: str = "inverted-pendulum"
+    """choice from ['inverted-pendulum',]"""
+    n_envs: int = 8
+    total_timesteps: int = 500000
+    learning_rate: float = 3e-4
+    n_steps: int = 2048
+    batch_size: int = 64
+    n_epochs: int = 10
+    gamma: float = 0.98
+    gae_lambda: float = 0.95
+    clip_range: float = 0.2
+    clip_range_vf: float = None
+    ent_coef: float = 0.0
+    vf_coef: float = 0.5
+    max_grad_norm: float = 0.5
+    target_kl: float = 0.03
+    update_adv: bool = True
+    normalize_advantage: bool = True
+    device: str = "cuda:0"
+    eval_frequency: int = 10000
     
     def get_params_dict(self):
         return asdict(self)

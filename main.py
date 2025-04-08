@@ -1,12 +1,13 @@
 import argparse
-from rl import DQNAgent, DDPGAgent, QLearningAgent
+from rl import DQNAgent, DDPGAgent, QLearningAgent, PPOAgent
 
 AGENT_MAP = {
     "dqn": DQNAgent,
     "ddqn": DQNAgent,
     "dueling": DQNAgent,
     "ddpg": DDPGAgent,
-    "ql": QLearningAgent
+    "ql": QLearningAgent,
+    "ppo": PPOAgent
 }
 parser = argparse.ArgumentParser()
 parser.add_argument("-a", "--algorithm", type=str, default="dqn")

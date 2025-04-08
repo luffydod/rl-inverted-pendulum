@@ -11,8 +11,7 @@ import torch.nn.functional as F
 import pygame
 import wandb
 import rich
-from stable_baselines3.common.buffers import ReplayBuffer
-from rl.per import RankPrioritizedExperienceReplayBuffer, PropPrioritizedExperienceReplayBuffer
+from buffers import ReplayBuffer, PrioritizedReplayBuffer
 from env import make_envs
 from config import DQNConfig
 
@@ -118,7 +117,7 @@ class DQNAgent:
             q_network = DuelingQNetwork(envs, init_type=self.init_type).to(conf.device)
         else:
             q_network = QNetwork(envs, init_type=self.init_type).to(conf.device)
-        q_network.load_state_dict(torch.load(model_path, map_location=conf.device))
+        q_network.load_state_dict(torch.load(model_path, map_location=conf.device, weights_only=True))
         return q_network
     
     def train(self, model_path: str = None):
@@ -154,26 +153,14 @@ class DQNAgent:
         # optimizer
         optimizer = optim.Adam(q_network.parameters(), lr=conf.learning_rate)
         
-        if self.buffer_type == "rank-per":
+        if self.buffer_type == "per":
             # prioritized experience replay buffer
-            rb = RankPrioritizedExperienceReplayBuffer(
+            rb = PrioritizedReplayBuffer(
                 conf.buffer_size,
                 envs.single_observation_space,
                 envs.single_action_space,
                 conf.device,
                 n_envs=envs.num_envs,
-                beta_annealing_steps=conf.total_timesteps,
-                handle_timeout_termination=False,
-            )
-        elif self.buffer_type == "prop-per":
-            # prioritized experience replay buffer
-            rb = PropPrioritizedExperienceReplayBuffer(
-                conf.buffer_size,
-                envs.single_observation_space,
-                envs.single_action_space,
-                conf.device,
-                n_envs=envs.num_envs,
-                beta_annealing_steps=conf.total_timesteps,
                 handle_timeout_termination=False,
             )
         else:
@@ -239,7 +226,13 @@ class DQNAgent:
             
             # 训练
             if global_step > conf.learning_starts and global_step % conf.train_frequency == 0:
-                data = rb.sample(conf.batch_size)
+                if self.buffer_type == "per":
+                    # 对于PER，sample返回(samples, indices, weights)
+                    data, indices, weights = rb.sample(conf.batch_size)
+                else:
+                    # 对于普通ReplayBuffer，sample只返回samples
+                    data = rb.sample(conf.batch_size)
+                
                 with torch.no_grad():
                     if self.algorithm == "dqn":
                         target_max, _ = target_network(data.next_observations).max(dim=1)
@@ -260,13 +253,14 @@ class DQNAgent:
                 # PER
                 else:
                     with torch.no_grad():
-                        td_errors = torch.abs(target_values - proximate_values) + 1e-6
+                        td_errors = torch.abs(target_values - proximate_values)
                         # clip td_errors
                         td_errors = torch.clamp(td_errors, min=0, max=100)
                     # 使用IS权重计算加权损失
-                    loss = (F.mse_loss(target_values, proximate_values, reduction='none') * data.weights).mean()
+                    weights_tensor = torch.FloatTensor(weights).to(conf.device)
+                    loss = (F.mse_loss(target_values, proximate_values, reduction='none') * weights_tensor).mean()
                     # 更新优先级
-                    rb.update_priorities(data.indices.detach().cpu().numpy(), td_errors.detach().cpu().numpy())
+                    rb.update_priorities(indices, td_errors.detach().cpu().numpy())
                 
                 optimizer.zero_grad()
                 loss.backward()
@@ -283,7 +277,7 @@ class DQNAgent:
                     if self.buffer_type == "rank-per" or self.buffer_type == "prop-per":
                         log_data.update({
                             "per/beta": rb.beta,
-                            "per/mean_weight": data.weights.mean().item(),
+                            "per/mean_weight": weights_tensor.mean().item(),
                             "per/max_priority": rb.max_priority
                         })
                     wandb.log(log_data, step=global_step)
