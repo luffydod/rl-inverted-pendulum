@@ -3,7 +3,6 @@ import torch as th
 import gymnasium as gym
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, List, Optional, Tuple, Type, Union, Any
 from gymnasium import spaces
 from buffers import RolloutBuffer
 from utils import explained_variance, get_schedule_fn, obs_as_tensor
@@ -13,6 +12,7 @@ import os
 import rich.progress
 from env import make_envs
 from config import PPOConfig
+from utils import save_model_config
 
 conf = PPOConfig()
 
@@ -374,7 +374,7 @@ class PPOAgent:
                 
         explained_var = explained_variance(self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten())
         
-        # 记录日志
+        # record logs
         print(f"训练/熵损失: {np.mean(entropy_losses):.4f}")
         print(f"训练/策略梯度损失: {np.mean(pg_losses):.4f}")
         print(f"训练/价值损失: {np.mean(value_losses):.4f}")
@@ -387,7 +387,7 @@ class PPOAgent:
         if self.clip_range_vf is not None:
             print(f"训练/价值函数裁剪范围: {clip_range_vf}")
             
-        # 记录到wandb
+        # record to wandb
         wandb.log({
             "losses/entropy_loss": np.mean(entropy_losses),
             "losses/policy_loss": np.mean(pg_losses),
@@ -407,7 +407,7 @@ class PPOAgent:
         参数:
             model_path: 预训练模型路径，如果为None则创建新模型
         """
-        # 初始化wandb
+        # initialize wandb
         run = wandb.init(
             project=f"{self.project_name}-{self.algorithm}",
             config=conf.get_params_dict(),
@@ -419,23 +419,23 @@ class PPOAgent:
         best_reward = -float('inf')
         best_model = None
         
-        envs = make_envs(conf.env_id, conf.n_envs)
-        eval_env = make_envs(conf.env_id, 1)
+        envs = make_envs(conf.env_id, conf.n_envs, normalize_obs=True)
+        eval_env = make_envs(conf.env_id, 1, normalize_obs=True)
         
-        # 创建策略网络
+        # create policy network
         if model_path is None:
             self.policy = ActorCriticPolicy(envs, learning_rate=conf.learning_rate)
         else:
             self.policy = ActorCriticPolicy(envs, learning_rate=conf.learning_rate)
             self.policy.load_state_dict(th.load(model_path, map_location=conf.device))
             
-        # 设置设备
+        # set device
         self.policy = self.policy.to(self.device)
         
-        # 初始化环境
+        # initialize environment
         self.env = envs
         
-        # 初始化缓冲区
+        # initialize buffer
         self.rollout_buffer = RolloutBuffer(
             self.n_steps,
             self.env.single_observation_space,
@@ -446,20 +446,20 @@ class PPOAgent:
             n_envs=self.env.num_envs,
         )
         
-        # 训练状态
+        # training status
         self.num_timesteps = 0
         self._last_obs = None
         self._last_episode_starts = None
         self._n_updates = 0
         self._current_progress_remaining = 1.0
         
-        # 设置学习率调度器
+        # setup learning rate scheduler
         self._setup_lr_schedule()
         
-        # 训练循环
+        # training iteration
         iteration = 0
         
-        # 获取初始观察
+        # get initial observation
         obs, _ = envs.reset()
         self._last_obs = obs
         self._last_episode_starts = np.zeros(envs.num_envs, dtype=bool)
@@ -497,18 +497,23 @@ class PPOAgent:
                         best_reward = eval_reward
                         best_model = self.policy.state_dict()
                         
-                    # 记录评估结果到wandb
                     wandb.log({
-                        "charts/eval_reward": eval_reward,
+                        "charts/eval_episodic_return": eval_reward,
                     }, step=self.num_timesteps)
                     
-        # 保存模型
+        # save model
         dir_path = f"models/{self.project_name}/{self.algorithm}"
         os.makedirs(dir_path, exist_ok=True)
         th.save(self.policy.state_dict(), f"{dir_path}/{run.id}.pth")
+        print(f"The final model is saved in {dir_path}/{run.id}.pth")
         if best_model is not None:
             th.save(best_model, f"{dir_path}/{run.id}_best.pth")
+            print(f"The best model is saved in {dir_path}/{run.id}_best.pth")
             
+        # record model config
+        save_model_config(dir_path, run.id, conf.get_params_dict())
+        
+        # finish wandb
         wandb.finish()
         
     def eval(self, global_step, eval_env):
@@ -526,7 +531,7 @@ class PPOAgent:
         self.policy.set_training_mode(False)
         
         # 重置环境
-        obs, _ = eval_env.reset()
+        obs, _ = eval_env.reset(options={"alpha": np.pi, "alpha_dot": 0})
         
         # 评估
         done = False
@@ -545,6 +550,6 @@ class PPOAgent:
         # 切换回训练模式
         self.policy.set_training_mode(True)
         
-        print(f"global_step={global_step}, eval_reward={total_reward:.2f}")
+        print(f"global_step={global_step}, eval_episodic_return={total_reward:.2f}")
         
         return total_reward 

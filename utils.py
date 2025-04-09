@@ -1,8 +1,9 @@
 import torch as th
-from typing import Dict, Tuple, Union, Callable
+from typing import Any, Dict, Tuple, Union, Callable
 import numpy as np
 from gymnasium import spaces
 import torch.nn as nn
+import wandb
 
 # A schedule takes the remaining progress as input
 # and outputs a scalar (e.g. learning rate, clip range, ...)
@@ -173,3 +174,10 @@ def obs_as_tensor(obs: Union[np.ndarray, Dict[str, np.ndarray]], device: th.devi
         return {key: th.as_tensor(_obs, device=device) for (key, _obs) in obs.items()}
     else:
         raise Exception(f"Unrecognized type of observation {type(obs)}")
+
+def save_model_config(dir_path: str, run_id: str, config: Dict[str, Any]):
+    config_path = f"{dir_path}/{run_id}_config.txt"
+    with open(config_path, "w") as f:
+        for key, value in config.items():
+            f.write(f"{key}: {value}\n")
+    print(f"The config is saved in {config_path}")
