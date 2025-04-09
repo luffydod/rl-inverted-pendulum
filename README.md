@@ -21,6 +21,7 @@
 - Dueling DQN
 - DDPG
 - PPO
+
 补充：实现了优先经验回放（PER）缓冲池。
 
 ## 待探讨的问题
@@ -89,14 +90,11 @@ python main.py -a ql -m test -p ./models/ql_model.pt
 | *R*  | 9.5         | Ω        | 转子电阻         |
 
 采样时间 $T_s$ 选取0.005s，离散时间动力学 $f$ 可以使用欧拉法获得
-$$
-\left\{
-\begin{array}{l}
-\alpha_{k+1} = \alpha_k + T_s \dot{\alpha}_k \\
-\dot{\alpha}_{k+1} = \dot{\alpha}_k + T_s \ddot{\alpha} (\alpha_k, \dot{\alpha}_k, a_k)
-\end{array}
-\right.
-$$
+
+$$\alpha_{k+1} = \alpha_k + T_s \dot{\alpha}_k$$
+
+$$\dot{\alpha}_{k+1} = \dot{\alpha}_k + T_s \ddot{\alpha} (\alpha_k, \dot{\alpha}_k, a_k)$$
+
 折扣因子选取 $\gamma=0.98$。选取较高折扣因子的目的是为了提高目标点(顶点)附近奖励在初始时刻状态价值的重要性，这样最优策略能够以成功将摆杆摆起并稳定作为最终目标。
 
 （Tip：可以将动作空间离散化成 {−3,0,3} 三个动作，以这三个动作作为动作集学习最优策略。）
@@ -127,9 +125,9 @@ self.state = self.np_random.uniform(low=low, high=high)
 ### 状态更新的边界
 
 ​ 由于角度范围是 $[-\pi, \pi]$，角速度范围是 $(-15\pi, 15\pi)$，使用欧拉法更新，采样时间 $T_s=0.005$。
-$$
-\theta_{t+1} = \theta_t + \dot\theta_t \cdot T_s
-$$
+
+$$\theta_{t+1} = \theta_t + \dot\theta_t \cdot T_s$$
+
 ​ 考虑倒立摆垂直向下的情况 $\theta_t=\pi$，最大更新量 $\Delta=\dot\theta_t \cdot T_s$，此时有$\pi<\theta_{t+1}<2\pi$，故应取模 $\theta_{t+1}=\theta_{t+1}-2\pi$；
 
 类似的，当 $-2\pi<\theta_{t+1}<-\pi$，应取模 $\theta_{t+1}=\theta_{t+1}+2\pi$。
@@ -180,9 +178,8 @@ f = -self.mu * self.v * np.abs(self.v) + f0
 ## DQN
 
 近似值：
-$$
-Q(S_{t}, a_t; \theta_t)
-$$
+
+$$Q(S_{t}, a_t; \theta_t)$$
 
 ```python
 # Q(s_t, a_t)
@@ -190,9 +187,8 @@ proximate_values = q_network(data.observations).gather(1, data.actions).squeeze(
 ```
 
 目标值：
-$$
-Y_t^{\text{DQN}} = R_{t+1} + \gamma \max_{a} Q(S_{t+1}, a; \theta_t^-)
-$$
+
+$$Y_t^{\text{DQN}} = R_{t+1} + \gamma \max_{a} Q(S_{t+1}, a; \theta_t^-)$$
 对应代码实现
 
 ```python
@@ -212,9 +208,8 @@ target_values = data.rewards.flatten() + config["gamma"] * target_max * (1 - dat
 ## DDQN
 
 目标值：
-$$
-Y_t^{\text{DoubleDQN}} = R_{t+1} + \gamma Q(S_{t+1}, \arg\max_{a} Q(S_{t+1}, a; \theta_t), \theta_t^-)
-$$
+
+$$Y_t^{\text{DoubleDQN}} = R_{t+1} + \gamma Q(S_{t+1}, \arg\max_{a} Q(S_{t+1}, a; \theta_t), \theta_t^-)$$
 对应代码实现：
 
 ```python
@@ -233,13 +228,13 @@ target_values = data.rewards.flatten() \
 和原始DQN相比，将Q值分离为状态值和动作优势估计。
 
 （1）减去最大值，最优动作具有零优势
-$$
-Q(s, a; \theta, \alpha, \beta) = V(s; \theta, \beta) + \left( A(s, a; \theta, \alpha) - \max_{a' \in |\mathcal{A}|} A(s, a'; \theta, \alpha) \right)
-$$
+
+$$Q(s, a; \theta, \alpha, \beta) = V(s; \theta, \beta) + \left( A(s, a; \theta, \alpha) - \max_{a' \in |\mathcal{A}|} A(s, a'; \theta, \alpha) \right)$$
+
 （2）使用均值替代
-$$
-Q(s, a; \theta, \alpha, \beta) = V(s; \theta, \beta) + \left( A(s, a; \theta, \alpha) - \frac{1}{|\mathcal{A}|} \sum_{a'} A(s, a'; \theta, \alpha) \right)
-$$
+
+$$Q(s, a; \theta, \alpha, \beta) = V(s; \theta, \beta) + \left( A(s, a; \theta, \alpha) - \frac{1}{|\mathcal{A}|} \sum_{a'} A(s, a'; \theta, \alpha) \right)$$
+
 网络架构对比：
 
 ![duelingdqn](img/duelingdqn.png)
