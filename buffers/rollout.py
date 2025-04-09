@@ -4,7 +4,6 @@ from typing import Dict, NamedTuple, Optional, Tuple, Union, Generator
 import numpy as np
 import torch as th
 from gymnasium import spaces
-from stable_baselines3.common.vec_env import VecNormalize
 
 from buffers.buffer import BaseBuffer, RolloutBufferSamples
 
@@ -176,7 +175,6 @@ class RolloutBuffer(BaseBuffer):
     def _get_samples(
         self,
         batch_inds: np.ndarray,
-        env: Optional[VecNormalize] = None,
     ) -> RolloutBufferSamples:
         data = (
             self.observations[batch_inds],

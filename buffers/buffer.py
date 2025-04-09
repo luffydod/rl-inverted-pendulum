@@ -4,7 +4,6 @@ from typing import Dict, NamedTuple, Optional, Tuple, Union
 import numpy as np
 import torch as th
 from gymnasium import spaces
-from stable_baselines3.common.vec_env import VecNormalize
 
 from utils import get_action_dim, get_obs_shape, get_device
 
@@ -105,24 +104,21 @@ class BaseBuffer(ABC):
         self.pos = 0
         self.full = False
 
-    def sample(self, batch_size: int, env: Optional[VecNormalize] = None):
+    def sample(self, batch_size: int):
         """
         :param batch_size: Number of element to sample
-        :param env: associated gym VecEnv
-            to normalize the observations/rewards when sampling
         :return:
         """
         upper_bound = self.buffer_size if self.full else self.pos
         batch_inds = np.random.randint(0, upper_bound, size=batch_size)
-        return self._get_samples(batch_inds, env=env)
+        return self._get_samples(batch_inds)
 
     @abstractmethod
     def _get_samples(
-        self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None
+        self, batch_inds: np.ndarray
     ) -> Union[ReplayBufferSamples, RolloutBufferSamples]:
         """
         :param batch_inds:
-        :param env:
         :return:
         """
         raise NotImplementedError()
@@ -140,18 +136,3 @@ class BaseBuffer(ABC):
         if copy:
             return th.tensor(array, device=self.device)
         return th.as_tensor(array, device=self.device)
-
-    @staticmethod
-    def _normalize_obs(
-        obs: Union[np.ndarray, Dict[str, np.ndarray]],
-        env: Optional[VecNormalize] = None,
-    ) -> Union[np.ndarray, Dict[str, np.ndarray]]:
-        if env is not None:
-            return env.normalize_obs(obs)
-        return obs
-
-    @staticmethod
-    def _normalize_reward(reward: np.ndarray, env: Optional[VecNormalize] = None) -> np.ndarray:
-        if env is not None:
-            return env.normalize_reward(reward).astype(np.float32)
-        return reward

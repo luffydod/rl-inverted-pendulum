@@ -3,7 +3,6 @@ from typing import Dict, Optional, Union, Any, List, Tuple
 import numpy as np
 import torch as th
 from gymnasium import spaces
-from stable_baselines3.common.vec_env import VecNormalize
 
 from buffers.buffer import ReplayBufferSamples
 from buffers.replay import ReplayBuffer
@@ -85,12 +84,11 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         else:
             self.priorities[self.buffer_size - 1] = self.max_priority
             
-    def sample(self, batch_size: int, env: Optional[VecNormalize] = None) -> Tuple[ReplayBufferSamples, np.ndarray, np.ndarray]:
+    def sample(self, batch_size: int) -> Tuple[ReplayBufferSamples, np.ndarray, np.ndarray]:
         """
         Sample elements from the replay buffer with probability proportional to their priority.
         
         :param batch_size: Number of element to sample
-        :param env: associated gym VecEnv to normalize the observations/rewards when sampling
         :return: Tuple of (samples, indices, weights)
         """
         if self.optimize_memory_usage:
@@ -114,7 +112,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         # Increment beta
         self.beta = min(1.0, self.beta + self.beta_increment)
         
-        return self._get_samples(batch_inds, env=env), batch_inds, weights
+        return self._get_samples(batch_inds), batch_inds, weights
     
     def _sample_proportional(self, batch_size: int, exclude_pos: Optional[int] = None, max_pos: Optional[int] = None) -> np.ndarray:
         """
@@ -182,28 +180,27 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         # Update max priority if necessary
         self.max_priority = max(self.max_priority, priorities.max())
         
-    def _get_samples(self, batch_inds: np.ndarray, env: Optional[VecNormalize] = None) -> ReplayBufferSamples:
+    def _get_samples(self, batch_inds: np.ndarray) -> ReplayBufferSamples:
         """
         Get samples from the buffer.
         
         :param batch_inds: Indices of the samples to get
-        :param env: associated gym VecEnv to normalize the observations/rewards when sampling
         :return: Samples from the buffer
         """
         # Sample randomly the env idx
         env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
         
         if self.optimize_memory_usage:
-            next_obs = self._normalize_obs(self.observations[(batch_inds + 1) % self.buffer_size, env_indices, :], env)
+            next_obs = self.observations[(batch_inds + 1) % self.buffer_size, env_indices, :]
         else:
-            next_obs = self._normalize_obs(self.next_observations[batch_inds, env_indices, :], env)
+            next_obs = self.next_observations[batch_inds, env_indices, :]
             
         data = (
-            self._normalize_obs(self.observations[batch_inds, env_indices, :], env),
+            self.observations[batch_inds, env_indices, :],
             self.actions[batch_inds, env_indices, :],
             next_obs,
             # Only use dones that are not due to timeouts
             (self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices])).reshape(-1, 1),
-            self._normalize_reward(self.rewards[batch_inds, env_indices].reshape(-1, 1), env),
+            self.rewards[batch_inds, env_indices].reshape(-1, 1),
         )
         return ReplayBufferSamples(*tuple(map(self.to_torch, data)))

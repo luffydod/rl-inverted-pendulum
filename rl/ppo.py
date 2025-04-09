@@ -419,7 +419,11 @@ class PPOAgent:
         best_reward = -float('inf')
         best_model = None
         
-        envs = make_envs(conf.env_id, conf.n_envs, normalize_obs=True)
+        if conf.env_id == "inverted-pendulum" and model_path is not None:
+            reset_option = "goal"
+        else:
+            reset_option = None
+        envs = make_envs(conf.env_id, conf.n_envs, normalize_obs=True, normalize_reward=True, reset_option=reset_option)
         eval_env = make_envs(conf.env_id, 1, normalize_obs=True)
         
         # create policy network
