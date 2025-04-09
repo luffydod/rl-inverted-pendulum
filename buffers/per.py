@@ -26,7 +26,6 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     :param epsilon: Small constant to ensure all transitions have a non-zero probability
     :param max_priority: Maximum priority to assign to new transitions
     :param optimize_memory_usage: Enable a memory efficient variant
-    :param handle_timeout_termination: Handle timeout termination separately
     """
     
     def __init__(
@@ -42,7 +41,6 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         epsilon: float = 1e-6,
         max_priority: float = 1.0,
         optimize_memory_usage: bool = False,
-        handle_timeout_termination: bool = True,
     ):
         super().__init__(
             buffer_size=buffer_size,
@@ -50,8 +48,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             action_space=action_space,
             device=device,
             n_envs=n_envs,
-            optimize_memory_usage=optimize_memory_usage,
-            handle_timeout_termination=handle_timeout_termination,
+            optimize_memory_usage=optimize_memory_usage
         )
         
         self.alpha = alpha

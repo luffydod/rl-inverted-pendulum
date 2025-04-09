@@ -110,7 +110,6 @@ class DDPGAgent:
             envs.single_action_space,
             conf.device,
             n_envs=envs.num_envs,
-            handle_timeout_termination=False,
         )
         
         # (n_envs, state_dim)
