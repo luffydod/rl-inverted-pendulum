@@ -1,35 +1,76 @@
-# 强化学习任务：倒立摆
+# 强化学习作业
 
 ## 项目介绍
 
-实现的场景：
+这是一个使用强化学习方法解决经典场景问题的小项目，本项目环境配置和主要依赖如下：
 
-- 倒立摆
-- 冰球游戏（待更新）
+- 任务环境使用 `gymnasium` 设计，提供了强化学习标准接口和环境模拟
+- 经验回放、经验回滚基于 `stable-baselines3` 代码进行删减和定制
+- `wandb（Weights & Biases）` 用于训练日志管理和可视化
 
-当前复现的深度强化学习算法：
+实现的任务场景：
 
+- 倒立摆✅
+- 冰壶游戏✅
+
+当前支持强化学习算法：
+
+- Q-Learning
 - DQN
 - DDQN
 - Dueling DQN
 - DDPG
+- PPO
+补充：实现了优先经验回放（PER）缓冲池。
 
-运行方式：
+## 待探讨的问题
+
+- 向量化环境和缓冲池的协同设计
+
+## 运行方式
+
+当前支持两种运行模式：
+
+- 训练模式（train）：训练新模型或继续训练已有模型
+- 测试模式（test）：使用训练好的模型进行测试
+
+## 命令行参数
+
+- `-a`, `--algorithm`：指定使用的算法，默认为`dqn`
+- `-m`, `--mode`：指定运行模式，可选`train`或`test`，默认为`train`
+- `-p`, `--model_path`：指定模型路径，用于加载已有模型或保存新模型，默认为None
+
+## 示例命令
+
+### 训练模型
 
 ```bash
-# 默认配置：mode=train, algorithm=dqn, model_path=None
-python main.py
+# 使用DQN算法训练模型
+python main.py -a dqn -m train
+python main.py -a dqn
 
-# 使用dueling dqn 训练
-python main.py -a dueling
+# 使用DDPG算法训练模型
+python main.py -a ddpg -m train
+python main.py -a ddpg
 
-# 测试，模型路径[models/{project_name}/{algorithm}/{run_id}.pth]
-python main.py -m test -a dueling -p models/inverted-pendulum/dueling/962k5war.pth
+# 使用PPO算法从已有模型继续训练
+python main.py -a ppo -m train -p ./models/ppo_model.pth
+python main.py -a ppo -p ./models/ppo_model.pth
+```
+
+### 测试模型
+
+```bash
+# 使用训练好的DQN模型进行测试
+python main.py -a dqn -m test -p ./models/dqn_model.pt
+
+# 使用训练好的Q-Learning模型进行测试
+python main.py -a ql -m test -p ./models/ql_model.pt
 ```
 
 超参数配置，见`./config.py`
 
-## 任务描述
+## 倒立摆任务描述
 
 ![exp](img/exp.png)
 
@@ -60,7 +101,7 @@ $$
 
 （Tip：可以将动作空间离散化成 {−3,0,3} 三个动作，以这三个动作作为动作集学习最优策略。）
 
-## 创建自定义环境
+## 倒立摆环境实现
 
 ### 经典控制场景
 
@@ -83,155 +124,7 @@ def step():
 self.state = self.np_random.uniform(low=low, high=high)
 ```
 
-### 设计实现
-
-```python
-class InvertedPendulumEnv(gym.Env):
-    
-    metadata = {
-        "render_modes": ["human", "rgb_array"],
-        "render_fps": 30,
-    }
-    
-    def __init__(self, 
-                 max_episode_steps: int = 200, 
-                 normalize_state: bool = False, 
-                 discrete_action: bool = False, 
-                 render_mode: Optional[str] = 'human'):
-        super(InvertedPendulumEnv, self).__init__()
-        
-        self.max_episode_steps = max_episode_steps
-        self.steps = 0
-        self.n_actions = 3     # 离散动作数量
-        self.max_voltage = 3.0  # 最大电压
-        self.l = 0.042            # 摆杆长度 (m)
-        self.m = 0.055            # 质量 (kg)
-        self.J = 1.91 * 1e-4          # 转动惯量 (kg⋅m²)
-        self.g = 9.81                   # 重力加速度 (m/s²)
-        self.b = 3 * 1e-6        # 阻尼系数 (N⋅m⋅s/rad)
-        self.K = 0.0536           # 转矩常数 (N⋅m/A)
-        self.R = 9.5            # 电机电阻 (Ω)
-        
-        self.render_mode = render_mode
-        self.discrete_action = discrete_action
-        self.normalize_state = normalize_state
-
-        self.last_u = 0
-        self.screen_dim = 500
-        self.screen = None
-        self.clock = None
-        self.isopen = True
-        
-        self.state_bounds = {
-            'alpha': (-np.pi, np.pi),
-            'alpha_dot': (-15*np.pi, 15*np.pi),
-            'u': (-self.max_voltage, self.max_voltage)
-        }
-        
-        high = np.array([np.pi, 15*np.pi], dtype=np.float32)
-        # 定义状态空间 [角度α, 角速度α_dot]
-        if self.normalize_state:
-            self.observation_space = gym.spaces.Box(
-                low=-np.ones_like(high), high=np.ones_like(high), dtype=np.float32
-            )
-        else:
-            self.observation_space = gym.spaces.Box(
-                low=-high, high=high, dtype=np.float32
-            )
-        
-        # 定义动作空间 (电压u)
-        if self.discrete_action:
-            self.discrete_actions = np.linspace(
-                -self.max_voltage, self.max_voltage, self.n_actions
-            )
-            self.action_space = gym.spaces.Discrete(self.n_actions)
-            
-        else:
-            self.action_space = gym.spaces.Box(
-                low=-self.max_voltage, high=self.max_voltage,
-                shape=(1,), dtype=np.float32
-            )
-    
-    def step(self, action):
-        self.steps += 1
-        
-        alpha, alpha_dot = self.state
-        
-        if self.discrete_action:
-            u = self.discrete_actions[action]
-        else:
-            u = np.clip(action, -3.0, 3.0)  # 确保电压在[-3,3]范围内
-        
-        self.last_u = u # for rendering
-        
-        # 实现系统动力学方程
-        # α̈ = (1/J)(mgl*sin(α) - bα̇ - (K²/R)α̇ + (K/R)u)
-        alpha_ddot = (1/self.J) * (
-            self.m * self.g * self.l * np.sin(alpha) - 
-            self.b * alpha_dot - 
-            (self.K**2/self.R) * alpha_dot + 
-            (self.K/self.R) * u
-        )
-        
-        # 使用欧拉方法进行数值积分
-        dt = 0.005  # 时间步长
-        alpha_dot_new = alpha_dot + alpha_ddot * dt
-        alpha_new = alpha + alpha_dot * dt
-        
-        # 处理边界角度更新
-        if alpha_new > np.pi:
-            alpha_new = alpha_new - 2 * np.pi
-        elif alpha_new < -np.pi:
-            alpha_new = alpha_new + 2 * np.pi
-            
-        # 确保角速度在[-15π,15π]范围内
-        alpha_dot_new = np.clip(alpha_dot_new, -15*np.pi, 15*np.pi)
-        
-        # R(s,a) = -s^T diag(5,0.1)s - u² -> R(s, a) = - 5 * alpha^2 - 0.1 * alpha_dot^2 - u^2
-        # a = normalize(alpha_new, -np.pi, np.pi)
-        # a_dot = normalize(alpha_dot_new, -15*np.pi, 15*np.pi)
-        # u = normalize(u, -3, 3)
-        reward = -(5 * alpha_new**2 + 0.1 * alpha_dot_new**2 + u**2)
-        
-        self.state = np.array([alpha_new, alpha_dot_new], dtype=np.float32)
-        
-        terminated = self.steps >= self.max_episode_steps  # 任务自然终止
-        truncated = self.steps >= self.max_episode_steps  # 到达最大步数限制
-        
-        return self._get_obs(), reward, terminated, truncated, {}
-    
-    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
-        super().reset(seed=seed)
-        self.steps = 0
-        if options is None:
-            alpha = self.np_random.uniform(*self.state_bounds['alpha'])
-            alpha_dot = self.np_random.uniform(*self.state_bounds['alpha_dot'])
-            self.state = np.array([alpha, alpha_dot], dtype=np.float32)
-        else:
-            alpha = options.get("alpha")
-            alpha_dot = options.get("alpha_dot")
-            self.state = np.array([alpha, alpha_dot], dtype=np.float32)
-        if self.render_mode == "human":
-            self.render()
-        return self._get_obs(), {}
-    
-    def _normalize_state(self, state):
-        alpha, alpha_dot = state
-        norm_alpha = normalize(alpha, *self.state_bounds['alpha'])
-        norm_alpha_dot = normalize(alpha_dot, *self.state_bounds['alpha_dot'])
-        return np.array([norm_alpha, norm_alpha_dot], dtype=np.float32)
-    
-    def _get_obs(self):
-        if self.normalize_state:
-            return self._normalize_state(self.state)
-        else:
-            alpha, alpha_dot = self.state
-            return np.array([alpha, alpha_dot], dtype=np.float32)
-    
-    # render(), close()函数参考经典环境代码
-```
-
-#### 状态更新的边界
+### 状态更新的边界
 
 ​ 由于角度范围是 $[-\pi, \pi]$，角速度范围是 $(-15\pi, 15\pi)$，使用欧拉法更新，采样时间 $T_s=0.005$。
 $$
@@ -241,7 +134,7 @@ $$
 
 类似的，当 $-2\pi<\theta_{t+1}<-\pi$，应取模 $\theta_{t+1}=\theta_{t+1}+2\pi$。
 
-#### wrappers.RecordEpisodeStatistic
+### wrappers.RecordEpisodeStatistic
 
 此包装器将跟踪累积奖励和剧集时长。
 
@@ -254,6 +147,34 @@ info = {
         "t": "<elapsed time since beginning of episode>"
     },
 }
+```
+
+## 冰壶游戏任务描述
+
+冰壶游戏是要控制一个半径为1、质量为1的冰壶，在一个长宽是100×100的正方形球场内移动。不考虑冰壶的自转。当冰壶和球场的边界碰撞时，碰撞前后冰壶的速度会乘上回弹系数0.9，移动方向和边界呈反射关系。
+
+我们需要分别操纵x轴和y轴的两个力控制冰壶的移动：
+
+- 在x轴的正或反方向施加5单位的力
+- 在y轴的正或反方向施加5单位的力
+这样一共会有4种不同的控制动作。
+
+动作可以每 `1/10` 秒变换一次，但在仿真冰壶运动动力学时，仿真时间间隔是 `1/100` 秒。除了我们施加的控制动作，冰壶会受到空气阻力，大小等于 `0.005×speed²`。假设冰壶和地面没有摩擦力。
+
+在每个决策时刻( `1/10` 秒)，环境反馈的奖励等于 `-d`，其中 `d` 是冰壶和任意给定的目标点之间的距离。为了保证学习的策略能够控制冰壶从任意初始位置上移动到任意目标点，每隔 `30` 秒就把冰壶状态重置到球场内的一个随机点上，同时 `x` 轴和 `y` 轴的速度也随机重置在 `[-10, 10]` 范围内。与此同时，目标点也被随机重置。
+(提示：把每隔 `30` 秒当成一次轨迹，把问题定义成 `episodic MDPs` 问题，`episodic length = 30/0.1 = 300 steps`。`γ = 1`或`γ = 0.9`)
+
+### 速度边界讨论
+
+只考虑x方向上的运动，冰壶初始位置在左边界，给一个正向最大初速度，每个时间步模拟施加的动作（力）与当前速度等向，在300轮次的模拟中记录最大时刻速度，结果是`29.79`（可能存在误差），因此状态空间速度边界设置为`[-30, 30]`。
+
+### 摩擦力模拟
+
+摩擦力注意是和速度反向的，因此注意计算的时候摩檫力`f = - mu * v * |v|`。
+
+```python
+# cal force
+f = -self.mu * self.v * np.abs(self.v) + f0
 ```
 
 ## DQN
@@ -331,16 +252,16 @@ class DuelingQNetwork(nn.Module):
         super().__init__()
         self.embedding_network = nn.Sequential(
             nn.Linear(state_dim, 128),
-            nn.LeakyReLU()
+            nn.ReLU()
         )
         self.v_network = nn.Sequential(
             nn.Linear(128, 64),
-            nn.LeakyReLU(),
+            nn.ReLU(),
             nn.Linear(64, 1)
         )
         self.a_network = nn.Sequential(
             nn.Linear(128, 64),
-            nn.LeakyReLU(),
+            nn.ReLU(),
             nn.Linear(64, action_dim)
         )
     
@@ -376,7 +297,7 @@ train_frequency:4
 
 ​ 变量控制：目标网络更新系数 $\tau$，按照 $\theta_{\text{target}} \leftarrow \tau \theta_{\text{current}} + (1-\tau)\theta_{\text{target}}$ 更新。实验组为$\tau=1.0,0.8,0.6,0.4,0.2,0.1$。
 
-​ TD Loss 随 $\tau$ 减小而下移，$\tau$ 越小，目标网络更新越“温和”，导致 `td_loss` 降低；软更新（$\tau <1$）通过逐步混合参数，使目标网络的变化更平滑，减少 Q 值目标的波动性，从而降低时序差分误差；硬更新（$\tau=1$）可能导致目标网络参数突变，使 Q 值目标不稳定，产生更大的 `td_loss`。
+​ TD Loss 随 $\tau$ 减小而下移，$\tau$ 越小，目标网络更新越"温和"，导致 `td_loss` 降低；软更新（$\tau <1$）通过逐步混合参数，使目标网络的变化更平滑，减少 Q 值目标的波动性，从而降低时序差分误差；硬更新（$\tau=1$）可能导致目标网络参数突变，使 Q 值目标不稳定，产生更大的 `td_loss`。
 
 ![tau_loss](img/tau_loss.png)
 
@@ -398,5 +319,3 @@ train_frequency:4
 ### wandb.Video
 
 ​ 输入的data可以是numpy  array，Channels should be (time, channel, height, width) or (batch, time, channel, height width)，被AI骗了，一直传的`(T, H, W, C)`，我说怎么百试不灵……
-
-## 持续更新中
