@@ -273,7 +273,7 @@ class DuelingQNetwork(nn.Module):
 
 ​ 使用Dueling Double DQN训练倒立摆，实验固定参数如下：
 
-```json
+```bash
 batch_size:128
 buffer_size:2,000,000
 end_epsilon:0.05
@@ -313,4 +313,4 @@ train_frequency:4
 
 ### wandb.Video
 
-​ 输入的data可以是numpy  array，Channels should be (time, channel, height, width) or (batch, time, channel, height width)，被AI骗了，一直传的`(T, H, W, C)`，我说怎么百试不灵……
+​ 输入的data可以是numpy  array，Channels should be (time, channel, height, width) or (batch, time, channel, height width)，一开始传的`(T, H, W, C)`，需要 transpose。
