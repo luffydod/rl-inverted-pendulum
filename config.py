@@ -2,10 +2,10 @@ from dataclasses import dataclass, asdict
 
 @dataclass
 class DQNConfig:
-    env_id: str = "curling"
+    env_id: str = "inverted-pendulum"
     """choice from ['inverted-pendulum', 'curling']"""
     n_envs: int = 1
-    total_timesteps: int = 10000
+    total_timesteps: int = 500000
     learning_rate: float = 3e-4
     buffer_size: int = 1000000
     batch_size: int = 128
@@ -20,7 +20,7 @@ class DQNConfig:
     end_epsilon: float = 0.05
     exploration_fraction: float = 0.2
     device: str = "cuda:0"
-    buffer_type: str = "per"
+    buffer_type: str = "uniform"
     """choice from ['per', 'uniform']"""
     
     def get_params_dict(self):

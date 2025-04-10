@@ -174,6 +174,7 @@ class DQNAgent:
             # 执行动作
             next_obs, rewards, terminations, truncations, infos = envs.step(actions)
             
+            dones = np.logical_or(terminations, truncations)
             if "episode" in infos:
                 episode_length = infos["episode"]["l"].mean()
                 episode_return = infos["episode"]["r"].mean()
@@ -190,7 +191,7 @@ class DQNAgent:
             # 记录回放缓冲区
             real_next_obs = next_obs.copy()
 
-            rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
+            rb.add(obs, real_next_obs, actions, rewards, dones, infos)
             
             # update obs
             obs = next_obs
