@@ -9,19 +9,18 @@ DISCRETE_ALPHA = 200
 DISCRETE_ALPHA_DOT = 200
 
 class InvertedPendulumEnv(gym.Env):
+    
     metadata = {
         "render_modes": ["human", "rgb_array"],
         "render_fps": 30,
     }
     
     def __init__(self, 
-                 max_episode_steps: int = 500,
+                 max_episode_steps: int = 300,
                  render_mode: Optional[str] = 'human',
                  discrete_action: bool = True,
                  discrete_state: bool = False,
-                 reset_option: str = None,
-                 stability_threshold: float = 0.1,  # 稳定性阈值（弧度）
-                 stability_steps: int = 10  # 保持稳定的步数
+                 reset_option: str = None
                  ):
         super(InvertedPendulumEnv, self).__init__()
         
@@ -41,11 +40,6 @@ class InvertedPendulumEnv(gym.Env):
         self.discrete_action = discrete_action
         self.discrete_state = discrete_state
         self.reset_option = reset_option
-        
-        # 稳定性检测参数
-        self.stability_threshold = stability_threshold
-        self.stability_steps = stability_steps
-        self.stable_count = 0
         
         if self.discrete_state:
             self.q_table = self._get_tables()
@@ -120,41 +114,20 @@ class InvertedPendulumEnv(gym.Env):
         
         self.state = np.array([alpha_new, alpha_dot_new], dtype=np.float32)
         
-        # 检查终止条件 - 结合稳定性检测和最大步数
-        terminated = self._check_done()
-        truncated = self.steps >= self.max_episode_steps  # 超过最大步数则截断
+        terminated = self.steps >= self.max_episode_steps  # 任务自然终止
+        truncated = self.steps >= self.max_episode_steps  # 到达最大步数限制
         
         return self._get_obs(), reward, terminated, truncated, {}
-    
-    def _check_done(self):
-        """检查摆杆是否在目标位置稳定"""
-        alpha, alpha_dot = self.state
-        
-        # 检查角度和角速度是否在稳定范围内
-        is_stable = (abs(alpha) < self.stability_threshold and 
-                    abs(alpha_dot) < self.stability_threshold)
-        
-        if is_stable:
-            self.stable_count += 1
-        else:
-            self.stable_count = 0
-        
-        # 如果连续稳定的步数达到阈值，则终止
-        return self.stable_count >= self.stability_steps
     
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
         self.steps = 0
-        self.stable_count = 0  # 重置稳定计数器
-        
         if self.reset_option == "goal":
             alpha = np.pi
             alpha_dot = 0
         elif options is None:
-            alpha = np.pi
-            alpha_dot = 0
-            # alpha = self.np_random.uniform(*self.state_bounds['alpha'])
-            # alpha_dot = self.np_random.uniform(*self.state_bounds['alpha_dot'])
+            alpha = self.np_random.uniform(*self.state_bounds['alpha'])
+            alpha_dot = self.np_random.uniform(*self.state_bounds['alpha_dot'])
         else:
             alpha = options.get("alpha")
             alpha_dot = options.get("alpha_dot")

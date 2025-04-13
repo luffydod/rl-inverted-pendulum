@@ -112,8 +112,8 @@ class DQNAgent:
         else:
             reset_option = None
             
-        envs = make_envs(conf.env_id, conf.n_envs, reset_option=reset_option)
-        eval_env = make_envs(conf.env_id, 1)
+        envs = make_envs(conf.env_id, conf.n_envs, normalize_obs=True, normalize_reward=True, reset_option=reset_option)
+        eval_env = make_envs(conf.env_id, 1, normalize_obs=True, normalize_reward=True)
         
         # create network
         if model_path is None:
@@ -179,7 +179,7 @@ class DQNAgent:
                 episode_length = infos["episode"]["l"].mean()
                 episode_return = infos["episode"]["r"].mean()
                 episode_time = infos["episode"]["t"].mean()
-                print(f"global_step={global_step}, episodic_return={episode_return:.2f}")
+                print(f"step={global_step}, episodic_return={episode_return:.2f}, episodic_length={episode_length:.2f}")
                 # record episode information to wandb
                 wandb.log({
                     "charts/episodic_return": episode_return,
@@ -246,7 +246,7 @@ class DQNAgent:
                         "losses/td_loss": loss.item(),
                         "losses/q_values": proximate_values.mean().item()
                     }
-                    if self.buffer_type == "rank-per" or self.buffer_type == "prop-per":
+                    if self.buffer_type == "per":
                         log_data.update({
                             "per/beta": rb.beta,
                             "per/mean_weight": weights_tensor.mean().item(),
@@ -324,7 +324,7 @@ class DQNAgent:
             # execute action and record frame
             obs, reward, terminated, truncated, _ = env.step(action)
             
-            done = terminated
+            done = terminated or truncated
             cumulative_reward += reward
             frame = env.render()[0]
             # (H, W, C) -> (C, H, W)

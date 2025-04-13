@@ -13,6 +13,20 @@ def make_env(
     normalize_reward: bool = False,
     reset_option: str = None
 ):
+    """创建单个环境实例的工厂函数
+    
+    参数:
+        env_id: 环境ID, 指定要创建的环境类型
+        render_mode: 渲染模式, 如'rgb_array'或'human'
+        discrete_action: 是否使用离散动作空间
+        discrete_state: 是否使用离散状态空间
+        normalize_obs: 是否标准化观测值
+        normalize_reward: 是否标准化奖励
+        reset_option: 环境重置选项
+        
+    返回:
+        thunk: 一个可调用对象，每次调用时创建一个新的环境实例
+    """
     def thunk():
         if env_id == "inverted-pendulum":
             env = InvertedPendulumEnv(
@@ -44,6 +58,21 @@ def make_envs(env_id: str = "inverted-pendulum",
             normalize_obs: bool = False,
             normalize_reward: bool = False,
             reset_option: str = None):
+    """创建多个向量化环境实例
+    
+    参数:
+        env_id: 环境ID
+        num_envs: 要创建的环境实例数量
+        render_mode: 渲染模式
+        discrete_action: 是否使用离散动作空间
+        discrete_state: 是否使用离散状态空间
+        normalize_obs: 是否标准化观测值
+        normalize_reward: 是否标准化奖励
+        reset_option: 环境重置选项
+        
+    返回:
+        SyncVectorEnv: 包含多个环境实例的向量化环境
+    """
     return SyncVectorEnv([make_env(env_id, 
                                    render_mode, 
                                    discrete_action, 
