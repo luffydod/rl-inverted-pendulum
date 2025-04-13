@@ -126,6 +126,8 @@ class InvertedPendulumEnv(gym.Env):
             alpha = np.pi
             alpha_dot = 0
         elif options is None:
+            # alpha = np.pi
+            # alpha_dot = 0
             alpha = self.np_random.uniform(*self.state_bounds['alpha'])
             alpha_dot = self.np_random.uniform(*self.state_bounds['alpha_dot'])
         else:

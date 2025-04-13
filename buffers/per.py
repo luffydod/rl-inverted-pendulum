@@ -25,7 +25,6 @@ class PrioritizedReplayBuffer(ReplayBuffer):
     :param beta_increment: How much to increment beta by on each update
     :param epsilon: Small constant to ensure all transitions have a non-zero probability
     :param max_priority: Maximum priority to assign to new transitions
-    :param optimize_memory_usage: Enable a memory efficient variant
     """
     
     def __init__(
@@ -37,10 +36,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         n_envs: int = 1,
         alpha: float = 0.6,
         beta: float = 0.4,
-        beta_increment: float = 0.001,
+        beta_increment: float = 2e-5,
         epsilon: float = 1e-6,
         max_priority: float = 1.0,
-        optimize_memory_usage: bool = False,
     ):
         super().__init__(
             buffer_size=buffer_size,
@@ -48,7 +46,6 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             action_space=action_space,
             device=device,
             n_envs=n_envs,
-            optimize_memory_usage=optimize_memory_usage
         )
         
         self.alpha = alpha
@@ -88,47 +85,32 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         :param batch_size: Number of element to sample
         :return: Tuple of (samples, indices, weights)
         """
-        if self.optimize_memory_usage:
-            # Do not sample the element with index `self.pos` as the transitions is invalid
-            if self.full:
-                batch_inds = self._sample_proportional(batch_size, exclude_pos=self.pos)
-            else:
-                batch_inds = self._sample_proportional(batch_size, max_pos=self.pos)
+        if self.full:
+            batch_inds, env_inds = self._sample_proportional(batch_size)
         else:
-            if self.full:
-                batch_inds = self._sample_proportional(batch_size)
-            else:
-                batch_inds = self._sample_proportional(batch_size, max_pos=self.pos)
+            batch_inds, env_inds = self._sample_proportional(batch_size, max_pos=self.pos)
                 
-        # Sample randomly the env idx
-        env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
-        
         # Calculate importance sampling weights
-        weights = self._calculate_weights(batch_inds, env_indices)
+        weights = self._calculate_weights(batch_inds, env_inds)
         
         # Increment beta
         self.beta = min(1.0, self.beta + self.beta_increment)
         
-        return self._get_samples(batch_inds), batch_inds, weights
+        return self._get_samples(batch_inds, env_inds), batch_inds, weights
     
-    def _sample_proportional(self, batch_size: int, exclude_pos: Optional[int] = None, max_pos: Optional[int] = None) -> np.ndarray:
+    def _sample_proportional(self, batch_size: int, max_pos: Optional[int] = None) -> np.ndarray:
         """
         Sample indices with probability proportional to their priority.
         
         :param batch_size: Number of indices to sample
-        :param exclude_pos: Position to exclude from sampling (for memory optimization)
         :param max_pos: Maximum position to sample from
         :return: Array of indices
         """
         if max_pos is None:
-            max_pos = self.buffer_size if self.full else self.pos
+            max_pos = self.buffer_size
             
         # Calculate sampling probabilities
         priorities = self.priorities[:max_pos].flatten()
-        
-        # Exclude the position if specified
-        if exclude_pos is not None:
-            priorities[exclude_pos] = 0
             
         # Calculate probabilities
         probs = priorities ** self.alpha
@@ -141,7 +123,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         env_indices = indices % self.n_envs
         buffer_indices = indices // self.n_envs
         
-        return buffer_indices
+        return buffer_indices, env_indices
         
     def _calculate_weights(self, batch_inds: np.ndarray, env_indices: np.ndarray) -> np.ndarray:
         """
@@ -177,27 +159,21 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         # Update max priority if necessary
         self.max_priority = max(self.max_priority, priorities.max())
         
-    def _get_samples(self, batch_inds: np.ndarray) -> ReplayBufferSamples:
+    def _get_samples(self, batch_inds: np.ndarray, env_inds: np.ndarray) -> ReplayBufferSamples:
         """
         Get samples from the buffer.
         
         :param batch_inds: Indices of the samples to get
         :return: Samples from the buffer
         """
-        # Sample randomly the env idx
-        env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
-        
-        if self.optimize_memory_usage:
-            next_obs = self.observations[(batch_inds + 1) % self.buffer_size, env_indices, :]
-        else:
-            next_obs = self.next_observations[batch_inds, env_indices, :]
+        next_obs = self.next_observations[batch_inds, env_inds, :]
             
         data = (
-            self.observations[batch_inds, env_indices, :],
-            self.actions[batch_inds, env_indices, :],
+            self.observations[batch_inds, env_inds, :],
+            self.actions[batch_inds, env_inds, :],
             next_obs,
             # Only use dones that are not due to timeouts
-            (self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices])).reshape(-1, 1),
-            self.rewards[batch_inds, env_indices].reshape(-1, 1),
+            (self.dones[batch_inds, env_inds] * (1 - self.timeouts[batch_inds, env_inds])).reshape(-1, 1),
+            self.rewards[batch_inds, env_inds].reshape(-1, 1),
         )
         return ReplayBufferSamples(*tuple(map(self.to_torch, data)))

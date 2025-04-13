@@ -42,11 +42,12 @@ def make_env(
             )
         else:
             raise ValueError(f"Invalid environment ID: {env_id}")
-        env = RecordEpisodeStatistics(env)
+        
         if normalize_obs:
             env = NormalizeObservation(env)
         if normalize_reward:
             env = NormalizeReward(env)
+        env = RecordEpisodeStatistics(env)
         return env
     return thunk
 

@@ -227,7 +227,7 @@ class DQNAgent:
                     with torch.no_grad():
                         td_errors = torch.abs(target_values - proximate_values)
                         # clip td_errors
-                        td_errors = torch.clamp(td_errors, min=0, max=100)
+                        # td_errors = torch.clamp(td_errors, min=0, max=100)
                     # 使用IS权重计算加权损失
                     weights_tensor = torch.FloatTensor(weights).to(conf.device)
                     loss = (F.mse_loss(target_values, proximate_values, reduction='none') * weights_tensor).mean()
