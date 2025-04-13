@@ -9,6 +9,9 @@ from utils import explained_variance, get_schedule_fn, obs_as_tensor
 from utils import get_device, init_weights
 import wandb
 import os
+import time
+import pygame
+import sys
 import rich.progress
 from env import make_envs
 from config import PPOConfig
@@ -424,7 +427,7 @@ class PPOAgent:
         else:
             reset_option = None
         envs = make_envs(conf.env_id, conf.n_envs, normalize_obs=True, normalize_reward=True, reset_option=reset_option)
-        eval_env = make_envs(conf.env_id, 1, normalize_obs=True)
+        eval_env = make_envs(conf.env_id, 1, normalize_obs=True, normalize_reward=True)
         
         # create policy network
         if model_path is None:
@@ -557,3 +560,41 @@ class PPOAgent:
         print(f"global_step={global_step}, eval_episodic_return={total_reward:.2f}")
         
         return total_reward 
+    
+    def test(self, model_path: str = None):
+        """
+        测试PPO代理
+        
+        参数:
+            model_path: 预训练模型路径，如果为None则使用当前模型
+        """
+        test_env = make_envs(conf.env_id, 1, normalize_obs=True, normalize_reward=True, render_mode='human')
+        self.policy = ActorCriticPolicy(test_env, learning_rate=conf.learning_rate)
+        self.policy.load_state_dict(th.load(model_path, map_location=conf.device))
+        self.policy.set_training_mode(False)
+        # 重置环境
+        obs, _ = test_env.reset(options={"alpha": np.pi, "alpha_dot": 0})
+        
+        # 测试
+        done = False
+        total_reward = 0
+        
+        while not done:
+            with th.no_grad():
+                obs_tensor = obs_as_tensor(obs, self.device)
+                actions, _, _ = self.policy(obs_tensor)
+                actions = actions.cpu().numpy()
+                
+            obs, rewards, terminations, truncations, infos = test_env.step(actions)
+            done = terminations[0] or truncations[0]
+            total_reward += rewards[0]
+            
+            test_env.render()[0]
+            time.sleep(0.02)
+            
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+
+        print(f"测试/总奖励: {total_reward:.2f}")
